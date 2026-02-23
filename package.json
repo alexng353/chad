@@ -12,6 +12,7 @@
 		"lint": "bunx biome check --fix --unsafe",
 		"format": "bunx biome format --write"
 	},
+	"license": "GPL-3.0-only",
 	"devDependencies": {
 		"@types/bun": "latest"
 	}

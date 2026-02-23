@@ -130,4 +130,4 @@ An MCP escape hatch tool is available to Claude &mdash; if a step is blocked or 
 
 ## License
 
-MIT
+[GPL-3.0](LICENSE)
