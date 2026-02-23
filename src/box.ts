@@ -7,6 +7,10 @@ export type ChinTag = { label: string; style?: (s: string) => string };
  *
  * Owns the three constrained regions (title, content, chin) and all
  * drawing state, so the caller just sets data and calls draw().
+ *
+ * Wrapped visual lines for committed content are cached. Only the
+ * in-progress line is re-wrapped each frame, making render() amortized
+ * O(1) instead of O(total lines).
  */
 export class BoxModel {
 	lines: string[] = [];
@@ -21,6 +25,11 @@ export class BoxModel {
 	private boxLines: number;
 	private drawn = false;
 
+	/** Cached wrapped visual lines for committed content. */
+	private wrappedCache: string[] = [];
+	/** The column width the cache was built at. */
+	private cachedCols = 0;
+
 	constructor(boxLines: number) {
 		this.boxLines = boxLines;
 	}
@@ -33,10 +42,10 @@ export class BoxModel {
 	/** Commit current (if any), then push `text` as a committed line. */
 	addLine(text: string) {
 		if (this.current !== null) {
-			this.lines.push(this.current);
-			this.current = null;
+			this.commitCurrent();
 		}
 		this.lines.push(text);
+		this.appendToCache(text);
 	}
 
 	/** Replace the in-progress line wholesale. */
@@ -47,17 +56,18 @@ export class BoxModel {
 	/** Commit the in-progress line to the committed list. */
 	finishCurrent() {
 		if (this.current !== null) {
-			this.lines.push(this.current);
-			this.current = null;
+			this.commitCurrent();
 		}
 	}
 
-	/** Clear all state (content, chin, drawn flag). */
+	/** Clear all state (content, chin, drawn flag, cache). */
 	reset() {
 		this.lines = [];
 		this.current = null;
 		this.chinTags = [];
 		this.drawn = false;
+		this.wrappedCache = [];
+		this.cachedCols = 0;
 	}
 
 	/** Replace the chin tag list. */
@@ -67,18 +77,16 @@ export class BoxModel {
 
 	/** Return the last `boxLines` wrapped visual lines from the model. */
 	getVisualLines(cols: number): string[] {
-		const all =
-			this.current !== null ? [...this.lines, this.current] : this.lines;
-		const inner = cols - 4;
+		this.ensureCache(cols);
 
-		const visual: string[] = [];
-		for (const line of all) {
-			for (const v of wrapLine(line, inner)) {
-				visual.push(v);
-			}
+		if (this.current !== null) {
+			const inner = cols - 4;
+			const currentWrapped = wrapLine(this.current, inner);
+			const all = this.wrappedCache.concat(currentWrapped);
+			return all.slice(-this.boxLines);
 		}
 
-		return visual.slice(-this.boxLines);
+		return this.wrappedCache.slice(-this.boxLines);
 	}
 
 	/** Render + cursor control: overwrites previous draw if needed. */
@@ -160,5 +168,36 @@ export class BoxModel {
 			return style(tag.label);
 		});
 		return `  ${parts.join(sep)}`;
+	}
+
+	/** Move current into lines and append its wrapped output to the cache. */
+	private commitCurrent() {
+		if (this.current === null) return;
+		const text = this.current;
+		this.lines.push(text);
+		this.current = null;
+		this.appendToCache(text);
+	}
+
+	/** Wrap a single line and append to the cache (if cols are known). */
+	private appendToCache(text: string) {
+		if (this.cachedCols === 0) return;
+		const inner = this.cachedCols - 4;
+		for (const v of wrapLine(text, inner)) {
+			this.wrappedCache.push(v);
+		}
+	}
+
+	/** Rebuild the cache if cols changed or cache is empty. */
+	private ensureCache(cols: number) {
+		if (cols === this.cachedCols) return;
+		this.cachedCols = cols;
+		const inner = cols - 4;
+		this.wrappedCache = [];
+		for (const line of this.lines) {
+			for (const v of wrapLine(line, inner)) {
+				this.wrappedCache.push(v);
+			}
+		}
 	}
 }
