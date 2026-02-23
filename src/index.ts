@@ -13,7 +13,7 @@ import { homedir, tmpdir } from "node:os";
 import { basename, dirname, resolve } from "node:path";
 import { ansi, mdToAnsi } from "./ansi";
 import { BoxModel } from "./box";
-import { runBrainstorm } from "./brainstorm";
+import { BRAINSTORM_SYSTEM_PROMPT, runBrainstorm } from "./brainstorm";
 import { runMcpServer } from "./mcp";
 import {
 	countChecked,
@@ -149,62 +149,35 @@ if (subcommand === "new") {
 		console.error(`error: ${outPath} already exists`);
 		process.exit(1);
 	}
-	writeFileSync(
-		outPath,
-		`# ${name}
 
-## Agent Instructions
+	console.log(`${ansi.bold("plan:")} ${outPath}`);
+	console.log();
 
-You are executing a plan one step at a time. Follow these rules exactly.
+	const initialPrompt = `I'm creating a new chad plan called "${name}".
 
-1. **Find your step.** Scan the "Steps" section below. Find the FIRST line matching \`- [ ]\`. That is your ONE step. Do ONLY that step.
+The plan file will be written to: \`${outPath}\`
 
-2. **Execute the step.** Read its description carefully. Refer to the "Reference" section for patterns and architecture. Read source files before modifying them.
+**What I can do:**
+- Help you design a step-by-step execution plan for any coding task
+- Read your codebase (CLAUDE.md, project structure, existing code) to understand conventions
+- Write the complete plan file with Agent Instructions, Reference, and Steps sections
+- Each step will have validation commands so the autonomous agent can verify its work
 
-3. **Validate.** Each step has a **Validate** line. Run those checks. If validation fails, fix the issue before proceeding.
+**What happens next:**
+1. Tell me what you want to build, migrate, or refactor
+2. I'll explore your codebase and ask clarifying questions
+3. I'll write the plan to \`${outPath}\`
+4. You can run it with \`chad ${outPath}\`
 
-4. **Mark complete.** After validation passes, edit THIS FILE (\`${outPath}\`) to change your step from \`- [ ]\` to \`- [x]\`.
+What would you like to plan?`;
 
-5. **Commit and push.** Stage all changed files (code + this plan file), create a NEW commit, and push.
-   - Message format: \`[agent] <imperative description>\`
-   - End every commit message with: \`Co-Authored-By: Claude <model> <noreply@anthropic.com>\`
-   - NEVER amend a previous commit. Always create new commits.
-   - NEVER commit \`.env\` files or secrets.
-
-6. **Discovered work.** If you find additional work not covered by a later step, append a new \`- [ ]\` step at the END of the Steps section. Do NOT do it now.
-
-7. **Quality gates.** After code changes:
-   - Run the project's linter — fix errors ONLY in files you touched.
-   - Run the project's type checker.
-
-8. **Escape hatch.** If your step is impossible, blocked, or requires human intervention, call the \`escapeHatch\` tool with a clear reason. This will stop the chad loop so the user can intervene.
-
-9. **Prohibited.**
-   - Do NOT enter plan mode or use EnterPlanMode.
-   - Do NOT use interactive tools (AskUserQuestion, etc.).
-   - Do NOT do more than one step.
-   - Do NOT amend previous commits.
-   - Do NOT skip validation.
-
----
-
-## Reference
-
-<!-- Project structure, code patterns, architecture notes -->
-
----
-
-## Steps
-
-### Phase 0: Infrastructure
-
-- [ ] **0.1 TODO**
-  Description.
-  **Validate:** \`echo "pass"\`
-`,
-	);
-	console.log(`${ansi.bold("created:")} ${outPath}`);
-	process.exit(0);
+	const claudeArgs = [
+		"--system-prompt",
+		BRAINSTORM_SYSTEM_PROMPT,
+		initialPrompt,
+	];
+	const { status } = spawnSync("claude", claudeArgs, { stdio: "inherit" });
+	process.exit(status ?? 0);
 }
 
 // --- `chad update` (before plan path resolution) ---

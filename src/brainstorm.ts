@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 
-const SYSTEM_PROMPT = `You are helping the user write an execution plan for chad, an autonomous loop runner that feeds a markdown checklist to \`claude -p\` one iteration at a time.
+export const BRAINSTORM_BRAINSTORM_SYSTEM_PROMPT = `You are helping the user write an execution plan for chad, an autonomous loop runner that feeds a markdown checklist to \`claude -p\` one iteration at a time.
 
 ## How chad works
 
@@ -85,7 +85,7 @@ Then write the plan file. Adapt the Agent Instructions to the project's conventi
 Write the plan to wherever the user specifies (default: \`~/.ralph/<project>-steps.md\`).`;
 
 export function runBrainstorm(planPath: string) {
-	const args = ["--system-prompt", SYSTEM_PROMPT];
+	const args = ["--system-prompt", BRAINSTORM_SYSTEM_PROMPT];
 
 	if (existsSync(planPath)) {
 		const content = readFileSync(planPath, "utf8");
