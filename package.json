@@ -7,6 +7,8 @@
 	},
 	"scripts": {
 		"dev": "bun run src/index.ts",
+		"build": "bun build --compile --define \"__CHAD_VERSION__=\\\"$(jq -r .version package.json)\\\"\" --minify src/index.ts --outfile chad",
+		"release": "bun run scripts/release.ts",
 		"lint": "bunx biome check --fix --unsafe",
 		"format": "bunx biome format --write"
 	},

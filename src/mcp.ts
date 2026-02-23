@@ -10,21 +10,13 @@ function mcpLog(msg: string) {
 	appendFileSync(MCP_LOG, `[${new Date().toISOString()}] ${msg}\n`);
 }
 
-const SIGNAL_FILE = process.env.CHAD_SIGNAL_FILE;
-if (!SIGNAL_FILE) {
-	mcpLog("CHAD_SIGNAL_FILE not set, exiting");
-	process.stderr.write("mcp: CHAD_SIGNAL_FILE not set\n");
-	process.exit(1);
-}
-mcpLog(`started (signal=${SIGNAL_FILE}, pid=${process.pid})`);
-
 function send(msg: Record<string, unknown>) {
 	const json = JSON.stringify(msg);
 	mcpLog(`send: ${json.slice(0, 200)}`);
 	process.stdout.write(`${json}\n`);
 }
 
-function handle(msg: Record<string, unknown>) {
+function handle(signalFile: string, msg: Record<string, unknown>) {
 	mcpLog(`recv: ${msg.method}`);
 	const id = msg.id;
 	switch (msg.method) {
@@ -71,7 +63,7 @@ function handle(msg: Record<string, unknown>) {
 			const params = msg.params as Record<string, unknown>;
 			const args = (params.arguments ?? {}) as Record<string, string>;
 			const reason = args.reason ?? "no reason given";
-			writeFileSync(SIGNAL_FILE, JSON.stringify({ reason }));
+			writeFileSync(signalFile, JSON.stringify({ reason }));
 			send({
 				jsonrpc: "2.0",
 				id,
@@ -97,32 +89,53 @@ function handle(msg: Record<string, unknown>) {
 	}
 }
 
-// --- Read JSON-RPC messages from stdin ---
-// Claude Code sends bare JSON (one object per chunk), not Content-Length framed.
-let inputBuf = "";
-process.stdin.setEncoding("utf8");
-process.stdin.on("data", (chunk: string) => {
-	inputBuf += chunk;
-	// Try to parse complete JSON objects separated by newlines
-	const lines = inputBuf.split("\n");
-	inputBuf = lines.pop() ?? "";
-	for (const line of lines) {
-		const trimmed = line.trim();
-		if (!trimmed) continue;
-		try {
-			handle(JSON.parse(trimmed));
-		} catch {
-			// not valid JSON, skip
-		}
+/**
+ * Run the MCP server. Reads JSON-RPC from stdin, writes to stdout.
+ * This function never returns — it keeps the process alive via stdin listener.
+ */
+export function runMcpServer(): void {
+	const signalFile = process.env.CHAD_SIGNAL_FILE;
+	if (!signalFile) {
+		mcpLog("CHAD_SIGNAL_FILE not set, exiting");
+		process.stderr.write("mcp: CHAD_SIGNAL_FILE not set\n");
+		process.exit(1);
 	}
-	// Also try parsing the remaining buffer as a complete JSON object
-	const trimmed = inputBuf.trim();
-	if (trimmed) {
-		try {
-			handle(JSON.parse(trimmed));
-			inputBuf = "";
-		} catch {
-			// incomplete, wait for more data
+	mcpLog(`started (signal=${signalFile}, pid=${process.pid})`);
+
+	// --- Read JSON-RPC messages from stdin ---
+	// Claude Code sends bare JSON (one object per chunk), not Content-Length framed.
+	let inputBuf = "";
+	process.stdin.setEncoding("utf8");
+	process.stdin.on("data", (chunk: string) => {
+		inputBuf += chunk;
+		// Try to parse complete JSON objects separated by newlines
+		const lines = inputBuf.split("\n");
+		inputBuf = lines.pop() ?? "";
+		for (const line of lines) {
+			const trimmed = line.trim();
+			if (!trimmed) continue;
+			try {
+				handle(signalFile, JSON.parse(trimmed));
+			} catch {
+				// not valid JSON, skip
+			}
 		}
-	}
-});
+		// Also try parsing the remaining buffer as a complete JSON object
+		const trimmed = inputBuf.trim();
+		if (trimmed) {
+			try {
+				handle(signalFile, JSON.parse(trimmed));
+				inputBuf = "";
+			} catch {
+				// incomplete, wait for more data
+			}
+		}
+	});
+}
+
+// --- Direct execution (source mode: `bun run mcp.ts`) ---
+// In compiled mode this module is always imported — never run directly.
+// Only auto-start when run as a standalone script via bun.
+if (!Bun.main.startsWith("/$bunfs/root/") && Bun.main.endsWith("/mcp.ts")) {
+	runMcpServer();
+}

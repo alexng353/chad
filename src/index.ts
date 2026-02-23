@@ -14,6 +14,7 @@ import { basename, dirname, resolve } from "node:path";
 import { ansi, mdToAnsi } from "./ansi";
 import { BoxModel } from "./box";
 import { runBrainstorm } from "./brainstorm";
+import { runMcpServer } from "./mcp";
 import {
 	countChecked,
 	extractCurrentStepBlock,
@@ -23,6 +24,16 @@ import {
 	printValidation,
 } from "./plan";
 import { runRebase } from "./rebase";
+import { checkForUpdateBackground, runUpdate } from "./update";
+import { getVersion, isCompiledBinary } from "./version";
+
+// --- Internal MCP server flag (must be checked before anything else) ---
+if (process.argv.includes("--__mcp-server")) {
+	runMcpServer();
+	// runMcpServer never returns (keeps stdin listener alive)
+	// but add an explicit await to prevent the script from falling through
+	await new Promise(() => {});
+}
 
 const DEBUG_LOG = "/tmp/chad-debug.log";
 
@@ -41,14 +52,16 @@ Commands:
   validate    Check plan file format and structure
   brainstorm  Open interactive claude session to develop the plan
   rebase      Clean up git history with claude's help
+  update      Update chad to the latest release
 
 Options:
-  --tmux        Run inside a new tmux session
-  -y            Skip interactive confirmation
-  -m, --max N   Max iterations (default: 50)
-  -b N          Box height in lines (default: 10)
-  --dry-run     Show the next step without running
-  -h, --help    Show this help
+  --tmux           Run inside a new tmux session
+  -y               Skip interactive confirmation
+  -m, --max N      Max iterations (default: 50)
+  -b N             Box height in lines (default: 10)
+  --dry-run        Show the next step without running
+  -V, --version    Show version
+  -h, --help       Show this help
 
 Keybindings (during execution):
   Ctrl-C    Kill current iteration and exit immediately
@@ -59,8 +72,21 @@ if (rawArgs.includes("-h") || rawArgs.includes("--help")) {
 	process.exit(0);
 }
 
+if (rawArgs.includes("-V") || rawArgs.includes("--version")) {
+	const mode = isCompiledBinary() ? "compiled" : "source";
+	console.log(`chad ${getVersion()} (${mode})`);
+	process.exit(0);
+}
+
 // --- Subcommand detection ---
-const subcommands = ["status", "validate", "brainstorm", "rebase", "new"];
+const subcommands = [
+	"status",
+	"validate",
+	"brainstorm",
+	"rebase",
+	"new",
+	"update",
+];
 const subcommand = subcommands.includes(rawArgs[0]) ? rawArgs[0] : null;
 const args = subcommand ? rawArgs.slice(1) : rawArgs;
 
@@ -181,6 +207,12 @@ You are executing a plan one step at a time. Follow these rules exactly.
 	process.exit(0);
 }
 
+// --- `chad update` (before plan path resolution) ---
+if (subcommand === "update") {
+	await runUpdate();
+	process.exit(0);
+}
+
 const planPath = positional[0];
 if (!planPath) {
 	console.log(HELP);
@@ -290,6 +322,9 @@ function releaseLock() {
 }
 process.on("exit", releaseLock);
 
+// --- Background update check ---
+checkForUpdateBackground();
+
 // --- Clean working tree check ---
 {
 	const gitStatus = spawnSync("git", ["status", "--porcelain"], {
@@ -364,7 +399,10 @@ const BOX_TOTAL = BOX_LINES + 3; // top border + content + bottom border + chin
 const box = new BoxModel();
 let boxDrawn = false;
 let iterationStart = Date.now();
+const overallStart = Date.now();
 let currentIteration = 0;
+const iterationDurations: number[] = [];
+let timerInterval: ReturnType<typeof setInterval> | null = null;
 
 function formatElapsed(ms: number): string {
 	const s = Math.floor(ms / 1000);
@@ -375,10 +413,15 @@ function formatElapsed(ms: number): string {
 
 function draw() {
 	const cols = process.stdout.columns || 80;
-	const elapsed = formatElapsed(Date.now() - iterationStart);
-	const chin = ansi.dim(
-		`  iteration ${currentIteration}/${maxIterations}  ·  ${elapsed}`,
-	);
+	const iterElapsed = formatElapsed(Date.now() - iterationStart);
+	const totalElapsed = formatElapsed(Date.now() - overallStart);
+	const stopTag = stopAfterIteration
+		? `  ${ansi.yellow("·  C-x stopping")}`
+		: "";
+	const chin =
+		ansi.dim(
+			`  iteration ${currentIteration}/${maxIterations}  ·  ${iterElapsed}  ·  total ${totalElapsed}`,
+		) + stopTag;
 
 	let out = "";
 	if (boxDrawn) {
@@ -387,6 +430,39 @@ function draw() {
 	out += box.render(BOX_LINES, cols, chin);
 	process.stdout.write(out);
 	boxDrawn = true;
+}
+
+function startTimer() {
+	stopTimer();
+	timerInterval = setInterval(() => {
+		if (boxDrawn) draw();
+	}, 1000);
+}
+
+function stopTimer() {
+	if (timerInterval !== null) {
+		clearInterval(timerInterval);
+		timerInterval = null;
+	}
+}
+
+function printTimingStats() {
+	if (iterationDurations.length === 0) return;
+
+	const total = Date.now() - overallStart;
+	const avg =
+		iterationDurations.reduce((a, b) => a + b, 0) / iterationDurations.length;
+	const longest = Math.max(...iterationDurations);
+	const shortest = Math.min(...iterationDurations);
+
+	console.log();
+	console.log(ansi.bold("timing"));
+	console.log(`  total:    ${formatElapsed(total)}`);
+	console.log(
+		`  iters:    ${iterationDurations.length} (avg ${formatElapsed(avg)})`,
+	);
+	console.log(`  longest:  ${formatElapsed(longest)}`);
+	console.log(`  shortest: ${formatElapsed(shortest)}`);
 }
 
 // --- Stream event parsing state ---
@@ -614,21 +690,31 @@ function handleTopLevel(msg: any) {
 }
 
 // --- MCP escape hatch ---
-const mcpScript = resolve(dirname(process.argv[1]), "mcp.ts");
 const escapeSignalFile = resolve(tmpdir(), `chad-escape-${process.pid}.json`);
 const mcpConfigFile = resolve(tmpdir(), `chad-mcp-${process.pid}.json`);
-if (!existsSync(mcpScript)) {
-	console.error(`error: ${mcpScript} not found`);
-	releaseLock();
-	process.exit(1);
+
+const mcpServerConfig = isCompiledBinary()
+	? { command: process.execPath, args: ["--__mcp-server"] }
+	: {
+			command: "bun",
+			args: ["run", resolve(dirname(process.argv[1]), "mcp.ts")],
+		};
+
+if (!isCompiledBinary()) {
+	const mcpScript = resolve(dirname(process.argv[1]), "mcp.ts");
+	if (!existsSync(mcpScript)) {
+		console.error(`error: ${mcpScript} not found`);
+		releaseLock();
+		process.exit(1);
+	}
 }
+
 writeFileSync(
 	mcpConfigFile,
 	JSON.stringify({
 		mcpServers: {
 			"chad-escape": {
-				command: "bun",
-				args: ["run", mcpScript],
+				...mcpServerConfig,
 				env: { CHAD_SIGNAL_FILE: escapeSignalFile },
 			},
 		},
@@ -661,9 +747,8 @@ if (process.stdin.isTTY) {
 			interrupted = true;
 			if (child) child.kill("SIGINT");
 		} else if (byte === 0x18) {
-			// Ctrl-X: stop after current iteration
-			stopAfterIteration = true;
-			box.addLine(ansi.yellow("(Ctrl-X) stopping after this iteration…"));
+			// Ctrl-X: toggle stop after current iteration
+			stopAfterIteration = !stopAfterIteration;
 			draw();
 		}
 	});
@@ -673,6 +758,7 @@ for (let i = 1; i <= maxIterations; i++) {
 	const content = readFileSync(plan, "utf8");
 	if (!content.includes("- [ ]")) {
 		console.log(ansi.green(ansi.bold("all steps complete.")));
+		printTimingStats();
 		process.exit(0);
 	}
 
@@ -690,6 +776,7 @@ for (let i = 1; i <= maxIterations; i++) {
 	currentIteration = i;
 	iterationStart = Date.now();
 	draw(); // draw initial empty box
+	startTimer();
 
 	const claudeDebugLog = resolve(
 		tmpdir(),
@@ -732,6 +819,11 @@ for (let i = 1; i <= maxIterations; i++) {
 		});
 	});
 
+	stopTimer();
+	iterationDurations.push(Date.now() - iterationStart);
+
+	const iterDuration = iterationDurations[iterationDurations.length - 1];
+
 	// Freeze the box: erase it, then print final content as plain text
 	if (boxDrawn) {
 		const cols = process.stdout.columns || 80;
@@ -744,6 +836,13 @@ for (let i = 1; i <= maxIterations; i++) {
 		}
 		boxDrawn = false;
 	}
+
+	// Per-iteration timing summary
+	console.log(
+		ansi.dim(
+			`  iteration ${i} completed in ${formatElapsed(iterDuration)}  ·  total ${formatElapsed(Date.now() - overallStart)}`,
+		),
+	);
 
 	// Check multi-step violation
 	const contentAfter = readFileSync(plan, "utf8");
@@ -768,16 +867,19 @@ for (let i = 1; i <= maxIterations; i++) {
 			console.log(`\n${ansi.red(ansi.bold("escape hatch triggered"))}`);
 		}
 		unlinkSync(escapeSignalFile);
+		printTimingStats();
 		process.exit(1);
 	}
 
 	if (exitCode === 130 || interrupted) {
 		console.log("\n[chad] stopping.");
+		printTimingStats();
 		process.exit(130);
 	}
 
 	if (stopAfterIteration) {
 		console.log("[chad] stopped (Ctrl-X).");
+		printTimingStats();
 		process.exit(0);
 	}
 
@@ -787,3 +889,4 @@ for (let i = 1; i <= maxIterations; i++) {
 }
 
 console.log(`hit max iterations (${maxIterations})`);
+printTimingStats();
