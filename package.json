@@ -1,0 +1,16 @@
+{
+	"name": "chad",
+	"version": "0.1.0",
+	"type": "module",
+	"bin": {
+		"chad": "./src/index.ts"
+	},
+	"scripts": {
+		"dev": "bun run src/index.ts",
+		"lint": "bunx biome check --fix --unsafe",
+		"format": "bunx biome format --write"
+	},
+	"devDependencies": {
+		"@types/bun": "latest"
+	}
+}
