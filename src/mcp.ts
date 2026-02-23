@@ -3,22 +3,29 @@
  * Minimal MCP stdio server exposing an `escapeHatch` tool.
  * When called, writes a signal file so chad knows to stop.
  */
-import { writeFileSync } from "node:fs";
+import { appendFileSync, writeFileSync } from "node:fs";
+
+const MCP_LOG = "/tmp/chad-mcp.log";
+function mcpLog(msg: string) {
+	appendFileSync(MCP_LOG, `[${new Date().toISOString()}] ${msg}\n`);
+}
 
 const SIGNAL_FILE = process.env.CHAD_SIGNAL_FILE;
 if (!SIGNAL_FILE) {
+	mcpLog("CHAD_SIGNAL_FILE not set, exiting");
 	process.stderr.write("mcp: CHAD_SIGNAL_FILE not set\n");
 	process.exit(1);
 }
+mcpLog(`started (signal=${SIGNAL_FILE}, pid=${process.pid})`);
 
 function send(msg: Record<string, unknown>) {
 	const json = JSON.stringify(msg);
-	process.stdout.write(
-		`Content-Length: ${Buffer.byteLength(json)}\r\n\r\n${json}`,
-	);
+	mcpLog(`send: ${json.slice(0, 200)}`);
+	process.stdout.write(`${json}\n`);
 }
 
 function handle(msg: Record<string, unknown>) {
+	mcpLog(`recv: ${msg.method}`);
 	const id = msg.id;
 	switch (msg.method) {
 		case "initialize":
@@ -90,29 +97,32 @@ function handle(msg: Record<string, unknown>) {
 	}
 }
 
-// --- Read JSON-RPC messages from stdin (Content-Length framing) ---
+// --- Read JSON-RPC messages from stdin ---
+// Claude Code sends bare JSON (one object per chunk), not Content-Length framed.
 let inputBuf = "";
 process.stdin.setEncoding("utf8");
 process.stdin.on("data", (chunk: string) => {
 	inputBuf += chunk;
-	while (true) {
-		const headerEnd = inputBuf.indexOf("\r\n\r\n");
-		if (headerEnd === -1) break;
-		const header = inputBuf.slice(0, headerEnd);
-		const match = header.match(/Content-Length:\s*(\d+)/i);
-		if (!match) {
-			inputBuf = inputBuf.slice(headerEnd + 4);
-			continue;
-		}
-		const len = Number.parseInt(match[1], 10);
-		const bodyStart = headerEnd + 4;
-		if (inputBuf.length < bodyStart + len) break;
-		const body = inputBuf.slice(bodyStart, bodyStart + len);
-		inputBuf = inputBuf.slice(bodyStart + len);
+	// Try to parse complete JSON objects separated by newlines
+	const lines = inputBuf.split("\n");
+	inputBuf = lines.pop() ?? "";
+	for (const line of lines) {
+		const trimmed = line.trim();
+		if (!trimmed) continue;
 		try {
-			handle(JSON.parse(body));
+			handle(JSON.parse(trimmed));
 		} catch {
-			// malformed message, skip
+			// not valid JSON, skip
+		}
+	}
+	// Also try parsing the remaining buffer as a complete JSON object
+	const trimmed = inputBuf.trim();
+	if (trimmed) {
+		try {
+			handle(JSON.parse(trimmed));
+			inputBuf = "";
+		} catch {
+			// incomplete, wait for more data
 		}
 	}
 });

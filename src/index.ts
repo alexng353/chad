@@ -46,6 +46,7 @@ Options:
   --tmux        Run inside a new tmux session
   -y            Skip interactive confirmation
   -m, --max N   Max iterations (default: 50)
+  -b N          Box height in lines (default: 10)
   --dry-run     Show the next step without running
   -h, --help    Show this help
 
@@ -74,6 +75,7 @@ const skipConfirm = args.includes("-y");
 const dryRun = args.includes("--dry-run");
 
 let maxIterations = 50;
+let boxHeight = 10;
 for (let i = 0; i < args.length; i++) {
 	if ((args[i] === "-m" || args[i] === "--max") && args[i + 1]) {
 		maxIterations = Number.parseInt(args[i + 1], 10);
@@ -82,12 +84,19 @@ for (let i = 0; i < args.length; i++) {
 			process.exit(1);
 		}
 	}
+	if (args[i] === "-b" && args[i + 1]) {
+		boxHeight = Number.parseInt(args[i + 1], 10);
+		if (Number.isNaN(boxHeight) || boxHeight < 1) {
+			console.error("error: -b requires a positive integer");
+			process.exit(1);
+		}
+	}
 }
 
-const flags = new Set(["--tmux", "-y", "--dry-run", "-m", "--max"]);
+const flags = new Set(["--tmux", "-y", "--dry-run", "-m", "--max", "-b"]);
 const positional: string[] = [];
 for (let i = 0; i < args.length; i++) {
-	if (args[i] === "-m" || args[i] === "--max") {
+	if (args[i] === "-m" || args[i] === "--max" || args[i] === "-b") {
 		i++; // skip the value
 		continue;
 	}
@@ -239,6 +248,7 @@ if (tmuxFlag) {
 	const tmuxArgs = [plan];
 	if (skipConfirm) tmuxArgs.push("-y");
 	if (maxIterations !== 50) tmuxArgs.push("-m", String(maxIterations));
+	if (boxHeight !== 10) tmuxArgs.push("-b", String(boxHeight));
 	const { status } = spawnSync(
 		"tmux",
 		["new-session", "-s", sessionName, "--", "bun", script, ...tmuxArgs],
@@ -349,7 +359,7 @@ if (!skipConfirm) {
 }
 
 // --- Box model ---
-const BOX_LINES = 10;
+const BOX_LINES = boxHeight;
 const BOX_TOTAL = BOX_LINES + 3; // top border + content + bottom border + chin
 const box = new BoxModel();
 let boxDrawn = false;
@@ -583,13 +593,18 @@ function handleTopLevel(msg: any) {
 const mcpScript = resolve(dirname(process.argv[1]), "mcp.ts");
 const escapeSignalFile = resolve(tmpdir(), `chad-escape-${process.pid}.json`);
 const mcpConfigFile = resolve(tmpdir(), `chad-mcp-${process.pid}.json`);
+if (!existsSync(mcpScript)) {
+	console.error(`error: ${mcpScript} not found`);
+	releaseLock();
+	process.exit(1);
+}
 writeFileSync(
 	mcpConfigFile,
 	JSON.stringify({
 		mcpServers: {
 			"chad-escape": {
 				command: "bun",
-				args: [mcpScript],
+				args: ["run", mcpScript],
 				env: { CHAD_SIGNAL_FILE: escapeSignalFile },
 			},
 		},
@@ -645,27 +660,34 @@ for (let i = 1; i <= maxIterations; i++) {
 		: content;
 
 	console.log(`\n${ansi.bold(`=== iteration ${i} / ${maxIterations} ===`)}\n`);
-	writeFileSync(DEBUG_LOG, `=== iteration ${i} ===\n`);
+	appendFileSync(DEBUG_LOG, `\n=== iteration ${i} ===\n`);
 	box.reset();
 	boxDrawn = false;
 	currentIteration = i;
 	iterationStart = Date.now();
+	draw(); // draw initial empty box
+
+	const claudeDebugLog = resolve(
+		tmpdir(),
+		`chad-claude-debug-${process.pid}.log`,
+	);
+	const claudeArgs = [
+		"-p",
+		prompt,
+		"--output-format",
+		"stream-json",
+		"--verbose",
+		"--include-partial-messages",
+		"--mcp-config",
+		mcpConfigFile,
+		"--debug-file",
+		claudeDebugLog,
+	];
 
 	const exitCode = await new Promise<number>((res) => {
-		child = spawn(
-			"claude",
-			[
-				"-p",
-				prompt,
-				"--output-format",
-				"stream-json",
-				"--verbose",
-				"--include-partial-messages",
-				"--mcp-config",
-				mcpConfigFile,
-			],
-			{ stdio: ["ignore", "pipe", "pipe"] },
-		);
+		child = spawn("claude", claudeArgs, {
+			stdio: ["ignore", "pipe", "pipe"],
+		});
 
 		let buf = "";
 		child.stdout?.on("data", (chunk: Buffer) => {
@@ -675,8 +697,9 @@ for (let i = 1; i <= maxIterations; i++) {
 			for (const line of lines) processLine(line);
 		});
 
-		// Drain stderr to prevent backpressure
-		child.stderr?.on("data", () => {});
+		child.stderr?.on("data", (chunk: Buffer) => {
+			appendFileSync(DEBUG_LOG, `[stderr] ${chunk.toString()}`);
+		});
 
 		child.on("close", (code) => {
 			if (buf.trim()) processLine(buf);
