@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { ansi, mdToAnsi } from "./ansi";
 
 export type Step = {
@@ -58,6 +58,16 @@ export function extractCurrentStepBlock(content: string): string | null {
 /** Count checked steps in content string. */
 export function countChecked(content: string): number {
 	return (content.match(/^\s*- \[x\]/gm) || []).length;
+}
+
+/** Mark the first unchecked step as complete. Returns true if a step was marked. */
+export function markCurrentStepComplete(planPath: string): boolean {
+	const content = readFileSync(planPath, "utf8");
+	const idx = content.indexOf("- [ ]");
+	if (idx === -1) return false;
+	const updated = `${content.slice(0, idx)}- [x]${content.slice(idx + 5)}`;
+	writeFileSync(planPath, updated);
+	return true;
 }
 
 /** Print plan status summary. */
@@ -181,7 +191,8 @@ export function validatePlan(planPath: string): ValidationIssue[] {
 		}
 		if (
 			!agentSection.includes("- [ ]") &&
-			!agentSection.toLowerCase().includes("mark complete")
+			!agentSection.toLowerCase().includes("mark complete") &&
+			!agentSection.toLowerCase().includes("completestep")
 		) {
 			issues.push({
 				severity: "warn",

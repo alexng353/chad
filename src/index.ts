@@ -16,9 +16,9 @@ import { BoxModel } from "./box";
 import { BRAINSTORM_SYSTEM_PROMPT, runBrainstorm } from "./brainstorm";
 import { runMcpServer } from "./mcp";
 import {
-	countChecked,
 	extractCurrentStepBlock,
 	findNextStep,
+	markCurrentStepComplete,
 	parseSteps,
 	printStatus,
 	printValidation,
@@ -58,7 +58,7 @@ Options:
   --tmux           Run inside a new tmux session
   -y               Skip interactive confirmation
   -m, --max N      Max iterations (default: 50)
-  -b N             Box height in lines (default: 10)
+  -b N             Box height in lines (default: 30)
   --dry-run        Show the next step without running
   -V, --version    Show version
   -h, --help       Show this help
@@ -101,7 +101,7 @@ const skipConfirm = args.includes("-y");
 const dryRun = args.includes("--dry-run");
 
 let maxIterations = 50;
-let boxHeight = 10;
+let boxHeight = 30;
 for (let i = 0; i < args.length; i++) {
 	if ((args[i] === "-m" || args[i] === "--max") && args[i + 1]) {
 		maxIterations = Number.parseInt(args[i + 1], 10);
@@ -252,7 +252,7 @@ if (tmuxFlag) {
 	const tmuxArgs = [plan];
 	if (skipConfirm) tmuxArgs.push("-y");
 	if (maxIterations !== 50) tmuxArgs.push("-m", String(maxIterations));
-	if (boxHeight !== 10) tmuxArgs.push("-b", String(boxHeight));
+	if (boxHeight !== 30) tmuxArgs.push("-b", String(boxHeight));
 
 	const cmd = isCompiledBinary()
 		? [process.execPath, ...tmuxArgs]
@@ -741,10 +741,10 @@ for (let i = 1; i <= maxIterations; i++) {
 
 	// Pre-process: extract current step block, sandwich the prompt
 	const stepBlock = extractCurrentStepBlock(content);
-	const checkedBefore = countChecked(content);
+	const planFooter = `Plan file location: ${plan}\nWhen you finish your step, call the completeStep tool to mark it done. Do NOT edit the plan file to check off steps — chad handles that for you.\nThe escapeHatch tool is ONLY for ending the entire loop: use escapeHatch("success", message) when the ENTIRE plan is done, or escapeHatch("failure", message) when blocked.`;
 	const prompt = stepBlock
-		? `>>> CURRENT STEP:\n${stepBlock}\n<<<\n\n${content}\n\n>>> CURRENT STEP (reminder):\n${stepBlock}\n<<<`
-		: content;
+		? `>>> CURRENT STEP:\n${stepBlock}\n<<<\n\n${content}\n\n>>> CURRENT STEP (reminder):\n${stepBlock}\n<<<\n\n${planFooter}`
+		: `${content}\n\n${planFooter}`;
 
 	console.log(`\n${ansi.bold(`=== iteration ${i} / ${maxIterations} ===`)}\n`);
 	appendFileSync(DEBUG_LOG, `\n=== iteration ${i} ===\n`);
@@ -821,39 +821,30 @@ for (let i = 1; i <= maxIterations; i++) {
 		),
 	);
 
-	// Check multi-step violation
-	const contentAfter = readFileSync(plan, "utf8");
-	const checkedAfter = countChecked(contentAfter);
-	const stepsCompleted = checkedAfter - checkedBefore;
-	if (stepsCompleted > 1) {
-		console.log(
-			ansi.red(
-				ansi.bold(
-					`warning: agent completed ${stepsCompleted} steps in one iteration (expected 1)`,
-				),
-			),
-		);
-	}
-
-	// Check MCP signals (escape hatch / plan done)
+	// Check MCP signals (completeStep / escapeHatch)
 	if (existsSync(escapeSignalFile)) {
 		try {
 			const signal = JSON.parse(readFileSync(escapeSignalFile, "utf8"));
-			if (signal.type === "done") {
-				unlinkSync(escapeSignalFile);
-				console.log(
-					ansi.green(ansi.bold("plan complete (agent called planDone).")),
-				);
+			unlinkSync(escapeSignalFile);
+			if (signal.type === "step_complete") {
+				markCurrentStepComplete(plan);
+			} else if (signal.type === "done") {
+				console.log(ansi.green(ansi.bold(`plan complete: ${signal.message}`)));
 				printTimingStats();
 				process.exit(0);
+			} else if (signal.type === "escape") {
+				console.log(
+					`\n${ansi.red(ansi.bold("escape hatch:"))} ${signal.message}`,
+				);
+				printTimingStats();
+				process.exit(1);
 			}
-			console.log(`\n${ansi.red(ansi.bold("escape hatch:"))} ${signal.reason}`);
 		} catch {
 			console.log(`\n${ansi.red(ansi.bold("escape hatch triggered"))}`);
+			unlinkSync(escapeSignalFile);
+			printTimingStats();
+			process.exit(1);
 		}
-		unlinkSync(escapeSignalFile);
-		printTimingStats();
-		process.exit(1);
 	}
 
 	if (exitCode === 130 || interrupted) {

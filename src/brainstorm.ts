@@ -8,8 +8,8 @@ export const BRAINSTORM_SYSTEM_PROMPT = `You are helping the user write an execu
 \`chad\` runs \`claude -p\` in a loop. Each iteration:
 1. Reads the entire plan file
 2. Passes it as the prompt to \`claude -p\` (non-interactive, no conversation history)
-3. Claude finds the first \`- [ ]\` step, executes it, marks it \`- [x]\`, commits, pushes
-4. Loop repeats until no \`- [ ]\` items remain or max iterations hit
+3. Claude finds the first \`- [ ]\` step, executes it, calls \`completeStep\`, commits, pushes
+4. Chad marks the checkbox \`- [x]\` and repeats until no \`- [ ]\` items remain or max iterations hit
 
 The plan file IS the entire prompt. Every Claude instance reads it from scratch with no prior context.
 
@@ -53,14 +53,14 @@ Include ALL of these rules, adapted to the project:
 1. **Find your step.** Scan the "Steps" section. Find the FIRST \`- [ ]\`. That is your ONE step. Do ONLY that step.
 2. **Execute the step.** Read its description carefully. Refer to "Reference" for patterns. Read source files before modifying.
 3. **Validate.** Each step has a **Validate** line. Run those checks. Fix issues before proceeding.
-4. **Mark complete.** Edit THIS FILE to change your step from \`- [ ]\` to \`- [x]\`.
-5. **Commit and push.** Stage all changed files (code + plan file), create a NEW commit, push.
+4. **Mark complete.** Call the \`completeStep\` tool to mark your step done. Do NOT edit the plan file to check off steps — chad handles that.
+5. **Commit and push.** Stage all changed source files, create a NEW commit, push.
    - Format: \`[agent] <imperative description>\`
    - End with: \`Co-Authored-By: Claude <model> <noreply@anthropic.com>\`
    - NEVER amend. Always new commits. NEVER commit secrets.
-6. **Discovered work.** Append new \`- [ ]\` steps at the END. Don't do them now.
+6. **Discovered work.** Append new \`- [ ]\` steps at the END of the plan file. Don't do them now.
 7. **Quality gates.** Run linter + type checker. Fix errors only in files you touched.
-8. **Escape hatch.** If a step is impossible, blocked, or needs human intervention, call the \`escapeHatch\` tool with a reason. This stops the chad loop.
+8. **Escape hatch.** If a step is impossible, blocked, or needs human intervention, call \`escapeHatch("failure", reason)\`. If the ENTIRE plan is complete, call \`escapeHatch("success", message)\`.
 9. **Prohibited.** No plan mode, no interactive tools, no multi-step, no amending, no skipping validation.
 
 ## Step writing rules

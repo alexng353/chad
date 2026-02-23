@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 /**
- * Minimal MCP stdio server exposing an `escapeHatch` tool.
- * When called, writes a signal file so chad knows to stop.
+ * Minimal MCP stdio server exposing `completeStep` and `escapeHatch` tools.
+ * When called, writes a signal file so chad knows what to do next.
  */
 import { appendFileSync, writeFileSync } from "node:fs";
 
@@ -41,27 +41,34 @@ function handle(signalFile: string, msg: Record<string, unknown>) {
 				result: {
 					tools: [
 						{
-							name: "escapeHatch",
+							name: "completeStep",
 							description:
-								"Stop the chad loop runner. Call this when the current step is impossible, blocked, or requires human intervention. Provide a clear reason.",
-							inputSchema: {
-								type: "object",
-								properties: {
-									reason: {
-										type: "string",
-										description: "Why this step cannot be completed",
-									},
-								},
-								required: ["reason"],
-							},
-						},
-						{
-							name: "planDone",
-							description:
-								"Signal that the entire plan is complete. Call this when all steps in the plan are checked off and there is no more work to do.",
+								"Mark the current step as complete. Call this when you have finished executing the current step and validated your work. Chad will mark the checkbox for you.",
 							inputSchema: {
 								type: "object",
 								properties: {},
+							},
+						},
+						{
+							name: "escapeHatch",
+							description:
+								'Stop the chad loop runner. Use type "failure" when the current step is impossible, blocked, or requires human intervention. Use type "success" only when the ENTIRE plan is complete and there is no more work to do.',
+							inputSchema: {
+								type: "object",
+								properties: {
+									type: {
+										type: "string",
+										enum: ["success", "failure"],
+										description:
+											'"success" if the entire plan is complete, "failure" if blocked or impossible',
+									},
+									message: {
+										type: "string",
+										description:
+											"Why the plan is complete (success) or why it cannot continue (failure)",
+									},
+								},
+								required: ["type", "message"],
 							},
 						},
 					],
@@ -73,21 +80,8 @@ function handle(signalFile: string, msg: Record<string, unknown>) {
 			const toolName = params.name as string;
 			const args = (params.arguments ?? {}) as Record<string, string>;
 
-			if (toolName === "planDone") {
-				writeFileSync(signalFile, JSON.stringify({ type: "done" }));
-				send({
-					jsonrpc: "2.0",
-					id,
-					result: {
-						content: [
-							{ type: "text", text: "chad will stop — plan complete." },
-						],
-					},
-				});
-			} else {
-				// escapeHatch (default)
-				const reason = args.reason ?? "no reason given";
-				writeFileSync(signalFile, JSON.stringify({ type: "escape", reason }));
+			if (toolName === "completeStep") {
+				writeFileSync(signalFile, JSON.stringify({ type: "step_complete" }));
 				send({
 					jsonrpc: "2.0",
 					id,
@@ -95,10 +89,51 @@ function handle(signalFile: string, msg: Record<string, unknown>) {
 						content: [
 							{
 								type: "text",
-								text: `chad will stop after this iteration. Reason: ${reason}`,
+								text: "Step marked complete. Chad will advance to the next step.",
 							},
 						],
 					},
+				});
+			} else if (toolName === "escapeHatch") {
+				const escapeType = args.type ?? "failure";
+				const message = args.message ?? "no message given";
+				if (escapeType === "success") {
+					writeFileSync(signalFile, JSON.stringify({ type: "done", message }));
+					send({
+						jsonrpc: "2.0",
+						id,
+						result: {
+							content: [
+								{
+									type: "text",
+									text: `chad will stop — plan complete. ${message}`,
+								},
+							],
+						},
+					});
+				} else {
+					writeFileSync(
+						signalFile,
+						JSON.stringify({ type: "escape", message }),
+					);
+					send({
+						jsonrpc: "2.0",
+						id,
+						result: {
+							content: [
+								{
+									type: "text",
+									text: `chad will stop after this iteration. Reason: ${message}`,
+								},
+							],
+						},
+					});
+				}
+			} else {
+				send({
+					jsonrpc: "2.0",
+					id,
+					error: { code: -32601, message: `Unknown tool: ${toolName}` },
 				});
 			}
 			break;
