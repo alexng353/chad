@@ -55,6 +55,7 @@ console.log(`${pkg.version} -> ${newVersion}`);
 execSync("git add package.json", { stdio: "inherit" });
 execSync(`git commit -m "release: ${tag}"`, { stdio: "inherit" });
 execSync(`git tag ${tag}`, { stdio: "inherit" });
-execSync("git push --follow-tags", { stdio: "inherit" });
+execSync("git push", { stdio: "inherit" });
+execSync(`git push origin ${tag}`, { stdio: "inherit" });
 
 console.log(`\npushed ${tag} — GitHub Actions will build and release.`);
