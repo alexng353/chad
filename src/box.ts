@@ -55,8 +55,8 @@ export class BoxModel {
 	}
 
 	/** Stateless render: rebuild visual lines from the model and return the box string. */
-	render(boxLines: number, cols: number): string {
-		return renderBox(this.getVisualLines(boxLines, cols), boxLines, cols);
+	render(boxLines: number, cols: number, chin?: string): string {
+		return renderBox(this.getVisualLines(boxLines, cols), boxLines, cols, chin);
 	}
 }
 
@@ -65,6 +65,7 @@ export function renderBox(
 	visualLines: string[],
 	boxLines: number,
 	cols: number,
+	chin?: string,
 ): string {
 	const inner = cols - 4;
 	let out = "";
@@ -95,6 +96,14 @@ export function renderBox(
 
 	// Bottom border
 	out += `${ansi.dim(`\u2514${"\u2500".repeat(inner + 2)}\u2518`)}\n`;
+
+	// Chin bar
+	if (chin) {
+		const chinVis = stripAnsi(chin).length;
+		const padded =
+			chinVis < inner + 4 ? chin + " ".repeat(inner + 4 - chinVis) : chin;
+		out += `${padded}\n`;
+	}
 
 	// Re-enable line wrapping
 	out += "\x1b[?7h";

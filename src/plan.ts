@@ -30,6 +30,36 @@ export function findNextStep(steps: Step[]): Step | undefined {
 	return steps.find((s) => !s.checked);
 }
 
+/** Extract the full block of text for the first unchecked step (title + description). */
+export function extractCurrentStepBlock(content: string): string | null {
+	const lines = content.split("\n");
+	let startIdx = -1;
+	for (let i = 0; i < lines.length; i++) {
+		if (lines[i].match(/^\s*- \[ \]/)) {
+			startIdx = i;
+			break;
+		}
+	}
+	if (startIdx === -1) return null;
+
+	// Collect lines until the next step or next section header
+	let endIdx = startIdx + 1;
+	while (endIdx < lines.length) {
+		const line = lines[endIdx];
+		// Next checkbox step
+		if (line.match(/^\s*- \[[ x]\]/)) break;
+		// Next section header
+		if (line.match(/^###?\s/)) break;
+		endIdx++;
+	}
+	return lines.slice(startIdx, endIdx).join("\n").trimEnd();
+}
+
+/** Count checked steps in content string. */
+export function countChecked(content: string): number {
+	return (content.match(/^\s*- \[x\]/gm) || []).length;
+}
+
 /** Print plan status summary. */
 export function printStatus(planPath: string) {
 	const steps = parseSteps(planPath);

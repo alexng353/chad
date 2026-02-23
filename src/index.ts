@@ -9,12 +9,19 @@ import {
 	unlinkSync,
 	writeFileSync,
 } from "node:fs";
-import { homedir } from "node:os";
-import { basename, resolve } from "node:path";
+import { homedir, tmpdir } from "node:os";
+import { basename, dirname, resolve } from "node:path";
 import { ansi, mdToAnsi } from "./ansi";
 import { BoxModel } from "./box";
 import { runBrainstorm } from "./brainstorm";
-import { findNextStep, parseSteps, printStatus, printValidation } from "./plan";
+import {
+	countChecked,
+	extractCurrentStepBlock,
+	findNextStep,
+	parseSteps,
+	printStatus,
+	printValidation,
+} from "./plan";
 import { runRebase } from "./rebase";
 
 const DEBUG_LOG = "/tmp/chad-debug.log";
@@ -29,6 +36,7 @@ Autonomous plan runner — feeds a markdown checklist to claude
 one iteration at a time until all steps are complete.
 
 Commands:
+  new NAME    Create a new plan from template in ~/.chad/
   status      Show plan progress (checked/unchecked steps)
   validate    Check plan file format and structure
   brainstorm  Open interactive claude session to develop the plan
@@ -51,7 +59,7 @@ if (rawArgs.includes("-h") || rawArgs.includes("--help")) {
 }
 
 // --- Subcommand detection ---
-const subcommands = ["status", "validate", "brainstorm", "rebase"];
+const subcommands = ["status", "validate", "brainstorm", "rebase", "new"];
 const subcommand = subcommands.includes(rawArgs[0]) ? rawArgs[0] : null;
 const args = subcommand ? rawArgs.slice(1) : rawArgs;
 
@@ -86,6 +94,82 @@ for (let i = 0; i < args.length; i++) {
 	if (!flags.has(args[i])) {
 		positional.push(args[i]);
 	}
+}
+
+// --- `chad new` (before plan path resolution) ---
+if (subcommand === "new") {
+	const name = positional[0];
+	if (!name) {
+		console.error("Usage: chad new NAME");
+		process.exit(1);
+	}
+	const slug = name
+		.toLowerCase()
+		.replace(/[^a-z0-9]+/g, "-")
+		.replace(/^-|-$/g, "");
+	const chadDir = resolve(homedir(), ".chad");
+	mkdirSync(chadDir, { recursive: true });
+	const outPath = resolve(chadDir, `${slug}.md`);
+	if (existsSync(outPath)) {
+		console.error(`error: ${outPath} already exists`);
+		process.exit(1);
+	}
+	writeFileSync(
+		outPath,
+		`# ${name}
+
+## Agent Instructions
+
+You are executing a plan one step at a time. Follow these rules exactly.
+
+1. **Find your step.** Scan the "Steps" section below. Find the FIRST line matching \`- [ ]\`. That is your ONE step. Do ONLY that step.
+
+2. **Execute the step.** Read its description carefully. Refer to the "Reference" section for patterns and architecture. Read source files before modifying them.
+
+3. **Validate.** Each step has a **Validate** line. Run those checks. If validation fails, fix the issue before proceeding.
+
+4. **Mark complete.** After validation passes, edit THIS FILE (\`${outPath}\`) to change your step from \`- [ ]\` to \`- [x]\`.
+
+5. **Commit and push.** Stage all changed files (code + this plan file), create a NEW commit, and push.
+   - Message format: \`[agent] <imperative description>\`
+   - End every commit message with: \`Co-Authored-By: Claude <model> <noreply@anthropic.com>\`
+   - NEVER amend a previous commit. Always create new commits.
+   - NEVER commit \`.env\` files or secrets.
+
+6. **Discovered work.** If you find additional work not covered by a later step, append a new \`- [ ]\` step at the END of the Steps section. Do NOT do it now.
+
+7. **Quality gates.** After code changes:
+   - Run the project's linter — fix errors ONLY in files you touched.
+   - Run the project's type checker.
+
+8. **Escape hatch.** If your step is impossible, blocked, or requires human intervention, call the \`escapeHatch\` tool with a clear reason. This will stop the chad loop so the user can intervene.
+
+9. **Prohibited.**
+   - Do NOT enter plan mode or use EnterPlanMode.
+   - Do NOT use interactive tools (AskUserQuestion, etc.).
+   - Do NOT do more than one step.
+   - Do NOT amend previous commits.
+   - Do NOT skip validation.
+
+---
+
+## Reference
+
+<!-- Project structure, code patterns, architecture notes -->
+
+---
+
+## Steps
+
+### Phase 0: Infrastructure
+
+- [ ] **0.1 TODO**
+  Description.
+  **Validate:** \`echo "pass"\`
+`,
+	);
+	console.log(`${ansi.bold("created:")} ${outPath}`);
+	process.exit(0);
 }
 
 const planPath = positional[0];
@@ -196,6 +280,26 @@ function releaseLock() {
 }
 process.on("exit", releaseLock);
 
+// --- Clean working tree check ---
+{
+	const gitStatus = spawnSync("git", ["status", "--porcelain"], {
+		encoding: "utf8",
+	});
+	if (gitStatus.stdout && gitStatus.stdout.trim().length > 0) {
+		console.error(ansi.red(ansi.bold("error: working directory is not clean")));
+		console.error("commit or stash your changes before running chad.\n");
+		const lines = gitStatus.stdout.trim().split("\n");
+		for (const line of lines.slice(0, 15)) {
+			console.error(`  ${line}`);
+		}
+		if (lines.length > 15) {
+			console.error(ansi.dim(`  … and ${lines.length - 15} more`));
+		}
+		releaseLock();
+		process.exit(1);
+	}
+}
+
 // --- Interactive confirmation ---
 if (!skipConfirm) {
 	const content = readFileSync(plan, "utf8");
@@ -246,16 +350,31 @@ if (!skipConfirm) {
 
 // --- Box model ---
 const BOX_LINES = 10;
+const BOX_TOTAL = BOX_LINES + 3; // top border + content + bottom border + chin
 const box = new BoxModel();
 let boxDrawn = false;
+let iterationStart = Date.now();
+let currentIteration = 0;
+
+function formatElapsed(ms: number): string {
+	const s = Math.floor(ms / 1000);
+	const m = Math.floor(s / 60);
+	const sec = s % 60;
+	return m > 0 ? `${m}m ${sec}s` : `${sec}s`;
+}
 
 function draw() {
 	const cols = process.stdout.columns || 80;
+	const elapsed = formatElapsed(Date.now() - iterationStart);
+	const chin = ansi.dim(
+		`  iteration ${currentIteration}/${maxIterations}  ·  ${elapsed}`,
+	);
+
 	let out = "";
 	if (boxDrawn) {
-		out += `\x1b[${BOX_LINES + 2}A`;
+		out += `\x1b[${BOX_TOTAL}A`;
 	}
-	out += box.render(BOX_LINES, cols);
+	out += box.render(BOX_LINES, cols, chin);
 	process.stdout.write(out);
 	boxDrawn = true;
 }
@@ -460,6 +579,33 @@ function handleTopLevel(msg: any) {
 	}
 }
 
+// --- MCP escape hatch ---
+const mcpScript = resolve(dirname(process.argv[1]), "mcp.ts");
+const escapeSignalFile = resolve(tmpdir(), `chad-escape-${process.pid}.json`);
+const mcpConfigFile = resolve(tmpdir(), `chad-mcp-${process.pid}.json`);
+writeFileSync(
+	mcpConfigFile,
+	JSON.stringify({
+		mcpServers: {
+			"chad-escape": {
+				command: "bun",
+				args: [mcpScript],
+				env: { CHAD_SIGNAL_FILE: escapeSignalFile },
+			},
+		},
+	}),
+);
+
+function cleanupMcp() {
+	try {
+		unlinkSync(mcpConfigFile);
+	} catch {}
+	try {
+		unlinkSync(escapeSignalFile);
+	} catch {}
+}
+process.on("exit", cleanupMcp);
+
 // --- Main loop ---
 let child: ReturnType<typeof spawn> | null = null;
 let interrupted = false;
@@ -491,21 +637,32 @@ for (let i = 1; i <= maxIterations; i++) {
 		process.exit(0);
 	}
 
+	// Pre-process: extract current step block, sandwich the prompt
+	const stepBlock = extractCurrentStepBlock(content);
+	const checkedBefore = countChecked(content);
+	const prompt = stepBlock
+		? `>>> CURRENT STEP:\n${stepBlock}\n<<<\n\n${content}\n\n>>> CURRENT STEP (reminder):\n${stepBlock}\n<<<`
+		: content;
+
 	console.log(`\n${ansi.bold(`=== iteration ${i} / ${maxIterations} ===`)}\n`);
 	writeFileSync(DEBUG_LOG, `=== iteration ${i} ===\n`);
 	box.reset();
 	boxDrawn = false;
+	currentIteration = i;
+	iterationStart = Date.now();
 
 	const exitCode = await new Promise<number>((res) => {
 		child = spawn(
 			"claude",
 			[
 				"-p",
-				content,
+				prompt,
 				"--output-format",
 				"stream-json",
 				"--verbose",
 				"--include-partial-messages",
+				"--mcp-config",
+				mcpConfigFile,
 			],
 			{ stdio: ["ignore", "pipe", "pipe"] },
 		);
@@ -532,13 +689,39 @@ for (let i = 1; i <= maxIterations; i++) {
 	if (boxDrawn) {
 		const cols = process.stdout.columns || 80;
 		// Erase the drawn box
-		process.stdout.write(`\x1b[${BOX_LINES + 2}A\x1b[J`);
+		process.stdout.write(`\x1b[${BOX_TOTAL}A\x1b[J`);
 		// Print final lines as plain text (reflows naturally on resize)
 		const finalLines = box.getVisualLines(BOX_LINES, cols);
 		for (const line of finalLines) {
 			process.stdout.write(`${line}\n`);
 		}
 		boxDrawn = false;
+	}
+
+	// Check multi-step violation
+	const contentAfter = readFileSync(plan, "utf8");
+	const checkedAfter = countChecked(contentAfter);
+	const stepsCompleted = checkedAfter - checkedBefore;
+	if (stepsCompleted > 1) {
+		console.log(
+			ansi.red(
+				ansi.bold(
+					`warning: agent completed ${stepsCompleted} steps in one iteration (expected 1)`,
+				),
+			),
+		);
+	}
+
+	// Check escape hatch
+	if (existsSync(escapeSignalFile)) {
+		try {
+			const signal = JSON.parse(readFileSync(escapeSignalFile, "utf8"));
+			console.log(`\n${ansi.red(ansi.bold("escape hatch:"))} ${signal.reason}`);
+		} catch {
+			console.log(`\n${ansi.red(ansi.bold("escape hatch triggered"))}`);
+		}
+		unlinkSync(escapeSignalFile);
+		process.exit(1);
 	}
 
 	if (exitCode === 130 || interrupted) {

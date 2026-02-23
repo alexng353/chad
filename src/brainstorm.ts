@@ -60,7 +60,8 @@ Include ALL of these rules, adapted to the project:
    - NEVER amend. Always new commits. NEVER commit secrets.
 6. **Discovered work.** Append new \`- [ ]\` steps at the END. Don't do them now.
 7. **Quality gates.** Run linter + type checker. Fix errors only in files you touched.
-8. **Prohibited.** No plan mode, no interactive tools, no multi-step, no amending, no skipping validation.
+8. **Escape hatch.** If a step is impossible, blocked, or needs human intervention, call the \`escapeHatch\` tool with a reason. This stops the chad loop.
+9. **Prohibited.** No plan mode, no interactive tools, no multi-step, no amending, no skipping validation.
 
 ## Step writing rules
 
