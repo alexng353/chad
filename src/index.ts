@@ -15,6 +15,7 @@ import { ansi, mdToAnsi } from "./ansi";
 import { BoxModel } from "./box";
 import { BRAINSTORM_SYSTEM_PROMPT, runBrainstorm } from "./brainstorm";
 import { ZSH_COMPLETIONS } from "./completions";
+import { loadConfig } from "./config";
 import { runMcpServer } from "./mcp";
 import { pickPlan } from "./picker";
 import {
@@ -109,15 +110,19 @@ function expandPath(p: string): string {
 	return resolve(p.startsWith("~") ? p.replace("~", homedir()) : p);
 }
 
+// --- Global config ---
+const config = loadConfig();
+
 // --- Parse flags ---
-const tmuxFlag = args.includes("--tmux");
 const skipConfirm = args.includes("-y");
 const dryRun = args.includes("--dry-run");
 const watchFlag = args.includes("-w") || args.includes("--watch");
 const resumeFlag = args.includes("--resume");
+const tmuxFlag = args.includes("--tmux") || config.tmux;
 
-let maxIterations = 50;
+let maxIterations = config.max;
 let boxHeight = 30;
+let cliModel: string | null = null;
 for (let i = 0; i < args.length; i++) {
 	if ((args[i] === "-m" || args[i] === "--max") && args[i + 1]) {
 		maxIterations = Number.parseInt(args[i + 1], 10);
@@ -133,7 +138,11 @@ for (let i = 0; i < args.length; i++) {
 			process.exit(1);
 		}
 	}
+	if (args[i] === "--model" && args[i + 1]) {
+		cliModel = args[i + 1];
+	}
 }
+const model = cliModel ?? config.model;
 
 const flags = new Set([
 	"--tmux",
@@ -145,10 +154,16 @@ const flags = new Set([
 	"-w",
 	"--watch",
 	"--resume",
+	"--model",
 ]);
 const positional: string[] = [];
 for (let i = 0; i < args.length; i++) {
-	if (args[i] === "-m" || args[i] === "--max" || args[i] === "-b") {
+	if (
+		args[i] === "-m" ||
+		args[i] === "--max" ||
+		args[i] === "-b" ||
+		args[i] === "--model"
+	) {
 		i++; // skip the value
 		continue;
 	}
@@ -371,8 +386,9 @@ if (tmuxFlag) {
 	const tmuxArgs = [plan];
 	if (skipConfirm) tmuxArgs.push("-y");
 	if (resumeFlag) tmuxArgs.push("--resume");
-	if (maxIterations !== 50) tmuxArgs.push("-m", String(maxIterations));
+	if (maxIterations !== config.max) tmuxArgs.push("-m", String(maxIterations));
 	if (boxHeight !== 30) tmuxArgs.push("-b", String(boxHeight));
+	if (cliModel) tmuxArgs.push("--model", cliModel);
 
 	const cmd = isCompiledBinary()
 		? [process.execPath, ...tmuxArgs]
@@ -418,6 +434,29 @@ function releaseLock() {
 	} catch {}
 }
 process.on("exit", releaseLock);
+
+// --- Coffee mode (idle inhibition) ---
+let coffeeActive = false;
+if (config.coffee.mode === "systemd-inhibit") {
+	const coffeeChild = spawn(
+		"systemd-inhibit",
+		[
+			"--what=idle",
+			"--who=coffee",
+			"--why=Chad never sleeps",
+			"sleep",
+			"infinity",
+		],
+		{ stdio: "ignore", detached: false },
+	);
+	coffeeChild.unref();
+	coffeeActive = true;
+	process.on("exit", () => {
+		try {
+			coffeeChild.kill();
+		} catch {}
+	});
+}
 
 // --- Background update check ---
 checkForUpdateBackground();
@@ -536,10 +575,15 @@ function draw() {
 	const stopTag = stopAfterIteration
 		? `  ${ansi.yellow("·  C-x stopping")}`
 		: "";
+	const coffeeTag = coffeeActive
+		? `  ${ansi.dim("·")}  ${ansi.magenta("Caffeinated")}`
+		: "";
 	const chin =
 		ansi.dim(
 			`  iteration ${currentIteration}/${maxIterations}  ·  ${iterElapsed}  ·  total ${totalElapsed}`,
-		) + stopTag;
+		) +
+		coffeeTag +
+		stopTag;
 
 	let out = "";
 	if (boxDrawn) {
@@ -928,6 +972,7 @@ If they ARE part of the current task (e.g., leftover from a previous interrupted
 		mcpConfigFile,
 		"--debug-file",
 		claudeDebugLog,
+		...(model ? ["--model", model] : []),
 	];
 
 	const exitCode = await new Promise<number>((res) => {
