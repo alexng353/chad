@@ -14,10 +14,13 @@ import { basename, dirname, resolve } from "node:path";
 import { ansi, mdToAnsi } from "./ansi";
 import { BoxModel } from "./box";
 import { BRAINSTORM_SYSTEM_PROMPT, runBrainstorm } from "./brainstorm";
+import { ZSH_COMPLETIONS } from "./completions";
 import { runMcpServer } from "./mcp";
+import { pickPlan } from "./picker";
 import {
 	extractCurrentStepBlock,
 	findNextStep,
+	listPlans,
 	markCurrentStepComplete,
 	parseSteps,
 	printStatus,
@@ -41,18 +44,23 @@ const DEBUG_LOG = "/tmp/chad-debug.log";
 const rawArgs = process.argv.slice(2);
 
 const HELP = `Usage: chad [options] PLAN_FILE
-       chad <command> PLAN_FILE
+       chad <command> [args]
 
 Autonomous plan runner — feeds a markdown checklist to claude
 one iteration at a time until all steps are complete.
 
 Commands:
-  new NAME    Create a new plan from template in ~/.chad/
-  status      Show plan progress (checked/unchecked steps)
-  validate    Check plan file format and structure
-  brainstorm  Open interactive claude session to develop the plan
-  rebase      Clean up git history with claude's help
-  update      Update chad to the latest release
+  chad <plan>        Run a plan file
+  chad list          List plans in ~/.chad/
+  chad next          Run first incomplete plan in ~/.chad/
+  chad continue      Re-run last plan used in this directory
+  chad new <name>    Create a new plan from template in ~/.chad/
+  chad status <plan> Show plan progress (checked/unchecked steps)
+  chad validate <plan>  Check plan file format and structure
+  chad brainstorm <plan>  Open interactive session to develop the plan
+  chad rebase <plan>  Clean up git history with claude's help
+  chad update        Update chad to the latest release
+  chad completions zsh  Output zsh completion script
 
 Options:
   --tmux           Run inside a new tmux session
@@ -86,6 +94,10 @@ const subcommands = [
 	"rebase",
 	"new",
 	"update",
+	"list",
+	"next",
+	"continue",
+	"completions",
 ];
 const subcommand = subcommands.includes(rawArgs[0]) ? rawArgs[0] : null;
 const args = subcommand ? rawArgs.slice(1) : rawArgs;
@@ -131,6 +143,9 @@ for (let i = 0; i < args.length; i++) {
 	}
 }
 
+const chadDir = resolve(homedir(), ".chad");
+const LAST_RUN_FILE = resolve(chadDir, "last-run.json");
+
 // --- `chad new` (before plan path resolution) ---
 if (subcommand === "new") {
 	const name = positional[0];
@@ -142,7 +157,6 @@ if (subcommand === "new") {
 		.toLowerCase()
 		.replace(/[^a-z0-9]+/g, "-")
 		.replace(/^-|-$/g, "");
-	const chadDir = resolve(homedir(), ".chad");
 	mkdirSync(chadDir, { recursive: true });
 	const outPath = resolve(chadDir, `${slug}.md`);
 	if (existsSync(outPath)) {
@@ -180,18 +194,90 @@ What would you like to plan?`;
 	process.exit(status ?? 0);
 }
 
+// --- `chad completions` (before plan path resolution) ---
+if (subcommand === "completions") {
+	const shell = positional[0];
+	if (shell === "zsh") {
+		console.log(ZSH_COMPLETIONS);
+	} else {
+		console.error("Usage: chad completions zsh");
+		process.exit(1);
+	}
+	process.exit(0);
+}
+
 // --- `chad update` (before plan path resolution) ---
 if (subcommand === "update") {
 	await runUpdate();
 	process.exit(0);
 }
 
-const planPath = positional[0];
-if (!planPath) {
-	console.log(HELP);
-	process.exit(1);
+// --- `chad list` ---
+if (subcommand === "list") {
+	mkdirSync(chadDir, { recursive: true });
+	const plans = listPlans(chadDir);
+	if (plans.length === 0) {
+		console.log("no plans found in ~/.chad/");
+		process.exit(0);
+	}
+	for (const p of plans) {
+		const barWidth = 20;
+		const filled =
+			p.total > 0 ? Math.round((p.checked / p.total) * barWidth) : 0;
+		const bar = `${"█".repeat(filled)}${"░".repeat(barWidth - filled)}`;
+		const status = p.complete
+			? ansi.dim(`${ansi.green(bar)} ${p.checked}/${p.total}`)
+			: `${ansi.green(bar)} ${p.checked}/${p.total}`;
+		const name = p.complete ? ansi.dim(p.name) : p.name;
+		console.log(`  ${name}  ${status}`);
+	}
+	process.exit(0);
 }
-const plan = expandPath(planPath);
+
+// --- `chad status` (no args → interactive picker) ---
+if (subcommand === "status" && !positional[0]) {
+	const selected = await pickPlan();
+	if (!selected) process.exit(0);
+	printStatus(selected);
+	process.exit(0);
+}
+
+// --- Resolve plan path ---
+let plan: string;
+
+if (subcommand === "next") {
+	mkdirSync(chadDir, { recursive: true });
+	const plans = listPlans(chadDir);
+	const next = plans.find((p) => !p.complete);
+	if (!next) {
+		console.log("all plans complete (or no plans found in ~/.chad/)");
+		process.exit(0);
+	}
+	console.log(`${ansi.bold("next plan:")} ${next.name}`);
+	plan = next.path;
+} else if (subcommand === "continue") {
+	let lastRun: Record<string, string> = {};
+	try {
+		lastRun = JSON.parse(readFileSync(LAST_RUN_FILE, "utf8"));
+	} catch {
+		console.error("error: no previous run found for this directory");
+		process.exit(1);
+	}
+	const lastPlan = lastRun[process.cwd()];
+	if (!lastPlan || !existsSync(lastPlan)) {
+		console.error("error: no previous run found for this directory");
+		process.exit(1);
+	}
+	console.log(`${ansi.bold("continuing:")} ${lastPlan}`);
+	plan = lastPlan;
+} else {
+	const planPath = positional[0];
+	if (!planPath) {
+		console.log(HELP);
+		process.exit(1);
+	}
+	plan = expandPath(planPath);
+}
 
 // --- Subcommands (exit early) ---
 if (subcommand === "status") {
@@ -227,6 +313,17 @@ if (!existsSync(plan)) {
 	console.error(`error: ${plan} not found`);
 	process.exit(1);
 }
+
+// --- Save last-run state ---
+try {
+	mkdirSync(chadDir, { recursive: true });
+	let lastRun: Record<string, string> = {};
+	try {
+		lastRun = JSON.parse(readFileSync(LAST_RUN_FILE, "utf8"));
+	} catch {}
+	lastRun[process.cwd()] = plan;
+	writeFileSync(LAST_RUN_FILE, JSON.stringify(lastRun, null, "\t"));
+} catch {}
 
 // --- Dry run ---
 if (dryRun) {

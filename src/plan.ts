@@ -1,4 +1,5 @@
-import { readFileSync, writeFileSync } from "node:fs";
+import { readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { ansi, mdToAnsi } from "./ansi";
 
 export type Step = {
@@ -68,6 +69,38 @@ export function markCurrentStepComplete(planPath: string): boolean {
 	const updated = `${content.slice(0, idx)}- [x]${content.slice(idx + 5)}`;
 	writeFileSync(planPath, updated);
 	return true;
+}
+
+export type PlanSummary = {
+	name: string;
+	path: string;
+	checked: number;
+	total: number;
+	complete: boolean;
+};
+
+/** List all .md plan files in a directory with their step counts. */
+export function listPlans(dir: string): PlanSummary[] {
+	let files: string[];
+	try {
+		files = readdirSync(dir)
+			.filter((f) => f.endsWith(".md"))
+			.sort();
+	} catch {
+		return [];
+	}
+	return files.map((f) => {
+		const path = resolve(dir, f);
+		const steps = parseSteps(path);
+		const checked = steps.filter((s) => s.checked).length;
+		return {
+			name: f.replace(/\.md$/, ""),
+			path,
+			checked,
+			total: steps.length,
+			complete: steps.length > 0 && checked === steps.length,
+		};
+	});
 }
 
 /** Print plan status summary. */

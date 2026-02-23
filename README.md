@@ -51,10 +51,15 @@ chad <command> PLAN_FILE
 | Command | Description |
 |---------|-------------|
 | `new NAME` | Create a plan from template in `~/.chad/` |
-| `status PLAN` | Show progress (checked/unchecked steps) |
+| `status [PLAN]` | Show progress (interactive picker if no plan given) |
 | `validate PLAN` | Check plan file format and structure |
 | `brainstorm PLAN` | Interactive Claude session to develop the plan |
 | `rebase PLAN` | Clean up git history with Claude's help |
+| `list` | List all plans in `~/.chad/` |
+| `next` | Run the first incomplete plan in `~/.chad/` |
+| `continue` | Re-run the last plan used in this directory |
+| `update` | Update chad to the latest release |
+| `completions zsh` | Output zsh completion script |
 
 ### Flags
 
@@ -62,7 +67,7 @@ chad <command> PLAN_FILE
 |------|-------------|
 | `-y` | Skip confirmation prompt |
 | `-m, --max N` | Max iterations (default: 50) |
-| `-b N` | Box height in lines (default: 10) |
+| `-b N` | Box height in lines (default: 30) |
 | `--dry-run` | Show next step without running |
 | `--tmux` | Run inside a new tmux session |
 
@@ -85,6 +90,25 @@ chad validate ~/.chad/my-feature.md
 
 # run it
 chad ~/.chad/my-feature.md
+```
+
+## Shell completions
+
+### Zsh
+
+```bash
+# Create the completions directory if needed
+mkdir -p ~/.zfunc
+
+# Generate the completion script
+chad completions zsh > ~/.zfunc/_chad
+```
+
+Add to your `~/.zshrc` (if not already present):
+
+```bash
+fpath=(~/.zfunc $fpath)
+autoload -Uz compinit && compinit
 ```
 
 ## Plan format
