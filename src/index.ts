@@ -551,10 +551,7 @@ if (!skipConfirm) {
 }
 
 // --- Box model ---
-const BOX_LINES = boxHeight;
-const BOX_TOTAL = BOX_LINES + 3; // top border + content + bottom border + chin
-const box = new BoxModel();
-let boxDrawn = false;
+const box = new BoxModel(boxHeight);
 let iterationStart = Date.now();
 const overallStart = Date.now();
 let currentIteration = 0;
@@ -570,34 +567,22 @@ function formatElapsed(ms: number): string {
 
 function draw() {
 	const cols = process.stdout.columns || 80;
-	const iterElapsed = formatElapsed(Date.now() - iterationStart);
-	const totalElapsed = formatElapsed(Date.now() - overallStart);
-	const stopTag = stopAfterIteration
-		? `  ${ansi.yellow("·  C-x stopping")}`
-		: "";
-	const coffeeTag = coffeeActive
-		? `  ${ansi.dim("·")}  ${ansi.magenta("Caffeinated")}`
-		: "";
-	const chin =
-		ansi.dim(
-			`  iteration ${currentIteration}/${maxIterations}  ·  ${iterElapsed}  ·  total ${totalElapsed}`,
-		) +
-		coffeeTag +
-		stopTag;
-
-	let out = "";
-	if (boxDrawn) {
-		out += `\x1b[${BOX_TOTAL}A`;
-	}
-	out += box.render(BOX_LINES, cols, chin);
-	process.stdout.write(out);
-	boxDrawn = true;
+	box.setChin([
+		{ label: `iteration ${currentIteration}/${maxIterations}` },
+		{ label: formatElapsed(Date.now() - iterationStart) },
+		{ label: `total ${formatElapsed(Date.now() - overallStart)}` },
+		...(coffeeActive ? [{ label: "Caffeinated", style: ansi.magenta }] : []),
+		...(stopAfterIteration
+			? [{ label: "C-x stopping", style: ansi.yellow }]
+			: []),
+	]);
+	box.draw(cols);
 }
 
 function startTimer() {
 	stopTimer();
 	timerInterval = setInterval(() => {
-		if (boxDrawn) draw();
+		draw();
 	}, 1000);
 }
 
@@ -951,7 +936,6 @@ If they ARE part of the current task (e.g., leftover from a previous interrupted
 	console.log(`\n${ansi.bold(`=== iteration ${i} / ${maxIterations} ===`)}\n`);
 	appendFileSync(DEBUG_LOG, `\n=== iteration ${i} ===\n`);
 	box.reset();
-	boxDrawn = false;
 	currentIteration = i;
 	iterationStart = Date.now();
 	draw(); // draw initial empty box
@@ -1005,17 +989,7 @@ If they ARE part of the current task (e.g., leftover from a previous interrupted
 	const iterDuration = iterationDurations[iterationDurations.length - 1];
 
 	// Freeze the box: erase it, then print final content as plain text
-	if (boxDrawn) {
-		const cols = process.stdout.columns || 80;
-		// Erase the drawn box
-		process.stdout.write(`\x1b[${BOX_TOTAL}A\x1b[J`);
-		// Print final lines as plain text (reflows naturally on resize)
-		const finalLines = box.getVisualLines(BOX_LINES, cols);
-		for (const line of finalLines) {
-			process.stdout.write(`${line}\n`);
-		}
-		boxDrawn = false;
-	}
+	box.flush(process.stdout.columns || 80);
 
 	// Per-iteration timing summary
 	console.log(
