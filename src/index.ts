@@ -442,12 +442,9 @@ function processLine(raw: string) {
 // biome-ignore lint/suspicious/noExplicitAny: event shapes are dynamic
 function handleStreamEvent(ev: any) {
 	switch (ev.type) {
-		case "message_start": {
-			const model = ev.message?.model ?? "?";
-			box.addLine(`${ansi.dim("model:")} ${ansi.cyan(model)}`);
-			draw();
+		case "message_start":
+			// model already shown by system/init handler
 			break;
-		}
 		case "content_block_start": {
 			const b = ev.content_block;
 			if (!b) break;
@@ -533,6 +530,12 @@ function handleStreamEvent(ev: any) {
 	}
 }
 
+function todoIcon(status?: string): string {
+	if (status === "completed") return ansi.green("\u2713");
+	if (status === "in_progress") return ansi.yellow("\u25cf");
+	return ansi.dim("\u25cb");
+}
+
 // biome-ignore lint/suspicious/noExplicitAny: tool input shapes vary
 function showToolSummary(name: string, input: any) {
 	const info = (() => {
@@ -551,6 +554,27 @@ function showToolSummary(name: string, input: any) {
 				return `/${input.pattern}/${input.path ? ` in ${input.path}` : ""}`;
 			case "Task":
 				return input.description ?? String(input.prompt ?? "").slice(0, 50);
+			case "TodoWrite": {
+				const todos = input.todos;
+				if (Array.isArray(todos)) {
+					for (const todo of todos) {
+						box.addLine(`    ${todoIcon(todo.status)} ${todo.content ?? ""}`);
+					}
+				}
+				return null;
+			}
+			case "TaskCreate":
+				return `${todoIcon("pending")} ${input.subject ?? ""}`;
+			case "TaskUpdate": {
+				const parts = [input.taskId ?? ""];
+				if (input.status) parts.push(todoIcon(input.status));
+				if (input.subject) parts.push(input.subject);
+				return parts.join(" ");
+			}
+			case "TaskGet":
+				return input.taskId ?? "";
+			case "TaskList":
+				return null;
 			default: {
 				const k = Object.keys(input)[0];
 				if (!k) return "";
