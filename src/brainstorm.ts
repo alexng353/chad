@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 
-export const BRAINSTORM_BRAINSTORM_SYSTEM_PROMPT = `You are helping the user write an execution plan for chad, an autonomous loop runner that feeds a markdown checklist to \`claude -p\` one iteration at a time.
+export const BRAINSTORM_SYSTEM_PROMPT = `You are helping the user write an execution plan for chad, an autonomous loop runner that feeds a markdown checklist to \`claude -p\` one iteration at a time.
 
 ## How chad works
 
