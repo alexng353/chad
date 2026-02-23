@@ -18,8 +18,10 @@ export function stripAnsi(s: string): string {
 	return s.replace(/\x1b\[[0-9;]*m/g, "");
 }
 
-/** Convert markdown **bold**, *italic*, __underline__ to ANSI */
+/** Convert markdown **bold**, *italic*, __underline__, `code` to ANSI */
 export function mdToAnsi(text: string): string {
+	// Inline code first (so backtick content isn't parsed for bold/italic)
+	text = text.replace(/`([^`]+)`/g, (_, c) => `\x1b[48;5;238m\`${c}\`\x1b[49m`);
 	text = text.replace(/\*\*(.+?)\*\*/g, (_, c) => ansi.bold(c));
 	text = text.replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, (_, c) => ansi.italic(c));
 	text = text.replace(/__(.+?)__/g, (_, c) => ansi.underline(c));

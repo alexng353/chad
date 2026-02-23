@@ -13,46 +13,133 @@ import { homedir } from "node:os";
 import { basename, resolve } from "node:path";
 import { ansi, mdToAnsi } from "./ansi";
 import { BoxModel } from "./box";
+import { runBrainstorm } from "./brainstorm";
+import { findNextStep, parseSteps, printStatus, printValidation } from "./plan";
+import { runRebase } from "./rebase";
 
 const DEBUG_LOG = "/tmp/chad-debug.log";
 
 // --- CLI args ---
-const args = process.argv.slice(2);
+const rawArgs = process.argv.slice(2);
 
 const HELP = `Usage: chad [options] PLAN_FILE
+       chad <command> PLAN_FILE
 
 Autonomous plan runner — feeds a markdown checklist to claude
 one iteration at a time until all steps are complete.
 
+Commands:
+  status      Show plan progress (checked/unchecked steps)
+  validate    Check plan file format and structure
+  brainstorm  Open interactive claude session to develop the plan
+  rebase      Clean up git history with claude's help
+
 Options:
-  --tmux      Run inside a new tmux session
-  -y          Skip interactive confirmation
-  -h, --help  Show this help
+  --tmux        Run inside a new tmux session
+  -y            Skip interactive confirmation
+  -m, --max N   Max iterations (default: 50)
+  --dry-run     Show the next step without running
+  -h, --help    Show this help
 
 Keybindings (during execution):
   Ctrl-C    Kill current iteration and exit immediately
   Ctrl-X    Stop after the current iteration finishes`;
 
-if (args.includes("-h") || args.includes("--help")) {
+if (rawArgs.includes("-h") || rawArgs.includes("--help")) {
 	console.log(HELP);
 	process.exit(0);
 }
 
+// --- Subcommand detection ---
+const subcommands = ["status", "validate", "brainstorm", "rebase"];
+const subcommand = subcommands.includes(rawArgs[0]) ? rawArgs[0] : null;
+const args = subcommand ? rawArgs.slice(1) : rawArgs;
+
+// --- Expand ~ in paths ---
+function expandPath(p: string): string {
+	return resolve(p.startsWith("~") ? p.replace("~", homedir()) : p);
+}
+
+// --- Parse flags ---
 const tmuxFlag = args.includes("--tmux");
 const skipConfirm = args.includes("-y");
-const positional = args.filter((a) => a !== "--tmux" && a !== "-y");
+const dryRun = args.includes("--dry-run");
+
+let maxIterations = 50;
+for (let i = 0; i < args.length; i++) {
+	if ((args[i] === "-m" || args[i] === "--max") && args[i + 1]) {
+		maxIterations = Number.parseInt(args[i + 1], 10);
+		if (Number.isNaN(maxIterations) || maxIterations < 1) {
+			console.error("error: --max requires a positive integer");
+			process.exit(1);
+		}
+	}
+}
+
+const flags = new Set(["--tmux", "-y", "--dry-run", "-m", "--max"]);
+const positional: string[] = [];
+for (let i = 0; i < args.length; i++) {
+	if (args[i] === "-m" || args[i] === "--max") {
+		i++; // skip the value
+		continue;
+	}
+	if (!flags.has(args[i])) {
+		positional.push(args[i]);
+	}
+}
 
 const planPath = positional[0];
 if (!planPath) {
 	console.log(HELP);
 	process.exit(1);
 }
-const plan = resolve(
-	planPath.startsWith("~") ? planPath.replace("~", homedir()) : planPath,
-);
+const plan = expandPath(planPath);
+
+// --- Subcommands (exit early) ---
+if (subcommand === "status") {
+	if (!existsSync(plan)) {
+		console.error(`error: ${plan} not found`);
+		process.exit(1);
+	}
+	printStatus(plan);
+	process.exit(0);
+}
+
+if (subcommand === "validate") {
+	if (!existsSync(plan)) {
+		console.error(`error: ${plan} not found`);
+		process.exit(1);
+	}
+	const ok = printValidation(plan);
+	process.exit(ok ? 0 : 1);
+}
+
+if (subcommand === "brainstorm") {
+	runBrainstorm(plan);
+	// runBrainstorm calls process.exit
+}
+
+if (subcommand === "rebase") {
+	runRebase(plan);
+	// runRebase calls process.exit
+}
+
+// --- Main run mode ---
 if (!existsSync(plan)) {
 	console.error(`error: ${plan} not found`);
 	process.exit(1);
+}
+
+// --- Dry run ---
+if (dryRun) {
+	const steps = parseSteps(plan);
+	const next = findNextStep(steps);
+	if (!next) {
+		console.log(ansi.green(ansi.bold("all steps complete.")));
+	} else {
+		console.log(`${ansi.bold("next step:")} ${mdToAnsi(next.line)}`);
+	}
+	process.exit(0);
 }
 
 // --- Lock ---
@@ -65,9 +152,12 @@ const sessionName = `chad-${planBasename.replace(/[.:]/g, "-")}-${lockHash.slice
 // --- tmux re-exec ---
 if (tmuxFlag) {
 	const script = process.argv[1];
+	const tmuxArgs = [plan];
+	if (skipConfirm) tmuxArgs.push("-y");
+	if (maxIterations !== 50) tmuxArgs.push("-m", String(maxIterations));
 	const { status } = spawnSync(
 		"tmux",
-		["new-session", "-s", sessionName, "--", "bun", script, plan],
+		["new-session", "-s", sessionName, "--", "bun", script, ...tmuxArgs],
 		{ stdio: "inherit" },
 	);
 	process.exit(status ?? 0);
@@ -116,6 +206,9 @@ if (!skipConfirm) {
 	console.log(
 		`${ansi.bold("todo:")} ${unchecked.length} unchecked step${unchecked.length === 1 ? "" : "s"}`,
 	);
+	if (maxIterations !== 50) {
+		console.log(`${ansi.bold("max:")}  ${maxIterations} iterations`);
+	}
 	console.log();
 	for (const line of unchecked.slice(0, 10)) {
 		console.log(`  ${mdToAnsi(line.trim())}`);
@@ -368,7 +461,6 @@ function handleTopLevel(msg: any) {
 }
 
 // --- Main loop ---
-const MAX = 50;
 let child: ReturnType<typeof spawn> | null = null;
 let interrupted = false;
 let stopAfterIteration = false;
@@ -392,14 +484,14 @@ if (process.stdin.isTTY) {
 	});
 }
 
-for (let i = 1; i <= MAX; i++) {
+for (let i = 1; i <= maxIterations; i++) {
 	const content = readFileSync(plan, "utf8");
 	if (!content.includes("- [ ]")) {
 		console.log(ansi.green(ansi.bold("all steps complete.")));
 		process.exit(0);
 	}
 
-	console.log(`\n${ansi.bold(`=== iteration ${i} / ${MAX} ===`)}\n`);
+	console.log(`\n${ansi.bold(`=== iteration ${i} / ${maxIterations} ===`)}\n`);
 	writeFileSync(DEBUG_LOG, `=== iteration ${i} ===\n`);
 	box.reset();
 	boxDrawn = false;
@@ -444,7 +536,6 @@ for (let i = 1; i <= MAX; i++) {
 		// Print final lines as plain text (reflows naturally on resize)
 		const finalLines = box.getVisualLines(BOX_LINES, cols);
 		for (const line of finalLines) {
-			// Strip trailing whitespace but keep ANSI formatting
 			process.stdout.write(`${line}\n`);
 		}
 		boxDrawn = false;
@@ -465,4 +556,4 @@ for (let i = 1; i <= MAX; i++) {
 	}
 }
 
-console.log(`hit max iterations (${MAX})`);
+console.log(`hit max iterations (${maxIterations})`);
