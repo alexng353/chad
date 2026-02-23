@@ -3,7 +3,7 @@
  * Minimal MCP stdio server exposing `completeStep` and `escapeHatch` tools.
  * When called, writes a signal file so chad knows what to do next.
  */
-import { appendFileSync, writeFileSync } from "node:fs";
+import { appendFileSync } from "node:fs";
 
 const MCP_LOG = "/tmp/chad-mcp.log";
 function mcpLog(msg: string) {
@@ -81,7 +81,10 @@ function handle(signalFile: string, msg: Record<string, unknown>) {
 			const args = (params.arguments ?? {}) as Record<string, string>;
 
 			if (toolName === "completeStep") {
-				writeFileSync(signalFile, JSON.stringify({ type: "step_complete" }));
+				appendFileSync(
+					signalFile,
+					`${JSON.stringify({ type: "step_complete" })}\n`,
+				);
 				send({
 					jsonrpc: "2.0",
 					id,
@@ -98,7 +101,10 @@ function handle(signalFile: string, msg: Record<string, unknown>) {
 				const escapeType = args.type ?? "failure";
 				const message = args.message ?? "no message given";
 				if (escapeType === "success") {
-					writeFileSync(signalFile, JSON.stringify({ type: "done", message }));
+					appendFileSync(
+						signalFile,
+						`${JSON.stringify({ type: "done", message })}\n`,
+					);
 					send({
 						jsonrpc: "2.0",
 						id,
@@ -112,9 +118,9 @@ function handle(signalFile: string, msg: Record<string, unknown>) {
 						},
 					});
 				} else {
-					writeFileSync(
+					appendFileSync(
 						signalFile,
-						JSON.stringify({ type: "escape", message }),
+						`${JSON.stringify({ type: "escape", message })}\n`,
 					);
 					send({
 						jsonrpc: "2.0",

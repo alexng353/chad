@@ -980,22 +980,37 @@ If they ARE part of the current task (e.g., leftover from a previous interrupted
 	);
 
 	// Check MCP signals (completeStep / escapeHatch)
+	// Signal file is JSONL — one JSON object per line — so we process all signals.
 	if (existsSync(escapeSignalFile)) {
 		try {
-			const signal = JSON.parse(readFileSync(escapeSignalFile, "utf8"));
+			const raw = readFileSync(escapeSignalFile, "utf8");
 			unlinkSync(escapeSignalFile);
-			if (signal.type === "step_complete") {
-				markCurrentStepComplete(plan);
-			} else if (signal.type === "done") {
-				console.log(ansi.green(ansi.bold(`plan complete: ${signal.message}`)));
-				printTimingStats();
-				process.exit(0);
-			} else if (signal.type === "escape") {
-				console.log(
-					`\n${ansi.red(ansi.bold("escape hatch:"))} ${signal.message}`,
-				);
-				printTimingStats();
-				process.exit(1);
+			const signals = raw
+				.split("\n")
+				.filter((l) => l.trim())
+				.map((l) => JSON.parse(l));
+
+			// Process step_complete first so the step is marked done
+			// before any exit signal is handled.
+			for (const signal of signals) {
+				if (signal.type === "step_complete") {
+					markCurrentStepComplete(plan);
+				}
+			}
+			for (const signal of signals) {
+				if (signal.type === "done") {
+					console.log(
+						ansi.green(ansi.bold(`plan complete: ${signal.message}`)),
+					);
+					printTimingStats();
+					process.exit(0);
+				} else if (signal.type === "escape") {
+					console.log(
+						`\n${ansi.red(ansi.bold("escape hatch:"))} ${signal.message}`,
+					);
+					printTimingStats();
+					process.exit(1);
+				}
 			}
 		} catch {
 			console.log(`\n${ansi.red(ansi.bold("escape hatch triggered"))}`);
