@@ -32,7 +32,10 @@ _chad_first_arg() {
 
 _chad_rest_args() {
   case "\${words[2]}" in
-    status|validate|brainstorm|rebase)
+    status)
+      _arguments -s -S '(-w --watch)'{-w,--watch}'[Watch for changes and re-render]' '*:plan:_chad_plan_files'
+      ;;
+    validate|brainstorm|rebase)
       _chad_plan_files
       ;;
     completions)
@@ -55,6 +58,7 @@ _chad() {
     '(-m --max)'{-m,--max}'[Max iterations]:iterations:' \\
     '-b[Box height in lines]:height:' \\
     '--dry-run[Show the next step without running]' \\
+    '--resume[Resume with dirty working tree]' \\
     '1:command:_chad_first_arg' \\
     '*::argument:_chad_rest_args'
 }

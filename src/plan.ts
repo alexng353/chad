@@ -1,6 +1,8 @@
-import { readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { readdirSync, readFileSync, watch, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { ansi, mdToAnsi } from "./ansi";
+
+const BRAILLE_SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
 export type Step = {
 	line: string;
@@ -103,40 +105,112 @@ export function listPlans(dir: string): PlanSummary[] {
 	});
 }
 
-/** Print plan status summary. */
-export function printStatus(planPath: string) {
-	const steps = parseSteps(planPath);
+/** Render plan status as an array of lines. */
+function renderStatusLines(
+	steps: Step[],
+	planPath: string,
+	spinnerFrame?: number,
+): string[] {
 	const checked = steps.filter((s) => s.checked).length;
 	const unchecked = steps.filter((s) => !s.checked).length;
 	const total = steps.length;
+	const lines: string[] = [];
 
-	console.log(`${ansi.bold("plan:")} ${planPath}`);
-	console.log(`${ansi.bold("progress:")} ${checked}/${total} steps complete`);
+	lines.push(`${ansi.bold("plan:")} ${planPath}`);
+	lines.push(`${ansi.bold("progress:")} ${checked}/${total} steps complete`);
 	if (total > 0) {
 		const pct = Math.round((checked / total) * 100);
 		const barWidth = 30;
 		const filled = Math.round((checked / total) * barWidth);
 		const bar = `${"█".repeat(filled)}${"░".repeat(barWidth - filled)}`;
-		console.log(`  ${ansi.green(bar)} ${pct}%`);
+		lines.push(`  ${ansi.green(bar)} ${pct}%`);
 	}
-	console.log();
+	lines.push("");
 
+	const nextStep = findNextStep(steps);
 	for (const step of steps) {
 		if (step.checked) {
-			console.log(`  ${ansi.dim(mdToAnsi(step.line))}`);
+			lines.push(`  ${ansi.dim(mdToAnsi(step.line))}`);
+		} else if (spinnerFrame !== undefined && step === nextStep) {
+			const frame = BRAILLE_SPINNER[spinnerFrame % BRAILLE_SPINNER.length];
+			const label = step.line.replace(/^-\s*\[\s*\]\s*/, "");
+			lines.push(`  ${ansi.cyan(frame)} ${mdToAnsi(label)}`);
 		} else {
-			console.log(`  ${mdToAnsi(step.line)}`);
+			lines.push(`  ${mdToAnsi(step.line)}`);
 		}
 	}
 
 	if (unchecked === 0) {
-		console.log(`\n${ansi.green(ansi.bold("all steps complete."))}`);
-	} else {
-		const next = findNextStep(steps);
-		if (next) {
-			console.log(`\n${ansi.bold("next:")} ${mdToAnsi(next.line)}`);
-		}
+		lines.push("");
+		lines.push(ansi.green(ansi.bold("all steps complete.")));
+	} else if (nextStep) {
+		lines.push("");
+		lines.push(`${ansi.bold("next:")} ${mdToAnsi(nextStep.line)}`);
 	}
+
+	return lines;
+}
+
+/** Print plan status summary (one-shot). */
+export function printStatus(planPath: string) {
+	const steps = parseSteps(planPath);
+	for (const line of renderStatusLines(steps, planPath)) {
+		console.log(line);
+	}
+}
+
+/** Watch a plan file and live-render status with a braille spinner. */
+export function watchStatus(planPath: string): void {
+	let frame = 0;
+	let lastLineCount = 0;
+	let steps = parseSteps(planPath);
+
+	// Hide cursor
+	process.stdout.write("\x1b[?25l");
+
+	function render() {
+		const lines = renderStatusLines(steps, planPath, frame);
+
+		if (lastLineCount > 0) {
+			process.stdout.write(`\x1b[${lastLineCount}A\x1b[J`);
+		}
+
+		process.stdout.write(`${lines.join("\n")}\n`);
+		lastLineCount = lines.length;
+	}
+
+	render();
+
+	// Spinner animation
+	const spinnerInterval = setInterval(() => {
+		frame++;
+		render();
+	}, 80);
+
+	// Re-parse on file change
+	const watcher = watch(planPath, () => {
+		try {
+			steps = parseSteps(planPath);
+		} catch {
+			// file may be mid-write; skip this event
+		}
+	});
+
+	function cleanup() {
+		clearInterval(spinnerInterval);
+		watcher.close();
+		// Show cursor
+		process.stdout.write("\x1b[?25h");
+	}
+
+	process.on("SIGINT", () => {
+		cleanup();
+		process.exit(0);
+	});
+	process.on("SIGTERM", () => {
+		cleanup();
+		process.exit(0);
+	});
 }
 
 type ValidationIssue = {

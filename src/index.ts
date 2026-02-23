@@ -25,6 +25,7 @@ import {
 	parseSteps,
 	printStatus,
 	printValidation,
+	watchStatus,
 } from "./plan";
 import { runRebase } from "./rebase";
 import { checkForUpdateBackground, runUpdate } from "./update";
@@ -55,7 +56,7 @@ Commands:
   chad next          Run first incomplete plan in ~/.chad/
   chad continue      Re-run last plan used in this directory
   chad new <name>    Create a new plan from template in ~/.chad/
-  chad status <plan> Show plan progress (checked/unchecked steps)
+  chad status [-w] <plan> Show plan progress (-w/--watch for live updates)
   chad validate <plan>  Check plan file format and structure
   chad brainstorm <plan>  Open interactive session to develop the plan
   chad rebase <plan>  Clean up git history with claude's help
@@ -64,6 +65,7 @@ Commands:
 
 Options:
   --tmux           Run inside a new tmux session
+  --resume         Resume with dirty working tree
   -y               Skip interactive confirmation
   -m, --max N      Max iterations (default: 50)
   -b N             Box height in lines (default: 30)
@@ -111,6 +113,8 @@ function expandPath(p: string): string {
 const tmuxFlag = args.includes("--tmux");
 const skipConfirm = args.includes("-y");
 const dryRun = args.includes("--dry-run");
+const watchFlag = args.includes("-w") || args.includes("--watch");
+const resumeFlag = args.includes("--resume");
 
 let maxIterations = 50;
 let boxHeight = 30;
@@ -131,7 +135,17 @@ for (let i = 0; i < args.length; i++) {
 	}
 }
 
-const flags = new Set(["--tmux", "-y", "--dry-run", "-m", "--max", "-b"]);
+const flags = new Set([
+	"--tmux",
+	"-y",
+	"--dry-run",
+	"-m",
+	"--max",
+	"-b",
+	"-w",
+	"--watch",
+	"--resume",
+]);
 const positional: string[] = [];
 for (let i = 0; i < args.length; i++) {
 	if (args[i] === "-m" || args[i] === "--max" || args[i] === "-b") {
@@ -238,6 +252,10 @@ if (subcommand === "list") {
 if (subcommand === "status" && !positional[0]) {
 	const selected = await pickPlan();
 	if (!selected) process.exit(0);
+	if (watchFlag) {
+		watchStatus(selected);
+		await new Promise(() => {}); // block forever
+	}
 	printStatus(selected);
 	process.exit(0);
 }
@@ -284,6 +302,10 @@ if (subcommand === "status") {
 	if (!existsSync(plan)) {
 		console.error(`error: ${plan} not found`);
 		process.exit(1);
+	}
+	if (watchFlag) {
+		watchStatus(plan);
+		await new Promise(() => {}); // block forever
 	}
 	printStatus(plan);
 	process.exit(0);
@@ -348,6 +370,7 @@ const sessionName = `chad-${planBasename.replace(/[.:]/g, "-")}-${lockHash.slice
 if (tmuxFlag) {
 	const tmuxArgs = [plan];
 	if (skipConfirm) tmuxArgs.push("-y");
+	if (resumeFlag) tmuxArgs.push("--resume");
 	if (maxIterations !== 50) tmuxArgs.push("-m", String(maxIterations));
 	if (boxHeight !== 30) tmuxArgs.push("-b", String(boxHeight));
 
@@ -400,22 +423,43 @@ process.on("exit", releaseLock);
 checkForUpdateBackground();
 
 // --- Clean working tree check ---
+let dirtyFiles = "";
 {
 	const gitStatus = spawnSync("git", ["status", "--porcelain"], {
 		encoding: "utf8",
 	});
 	if (gitStatus.stdout && gitStatus.stdout.trim().length > 0) {
-		console.error(ansi.red(ansi.bold("error: working directory is not clean")));
-		console.error("commit or stash your changes before running chad.\n");
-		const lines = gitStatus.stdout.trim().split("\n");
-		for (const line of lines.slice(0, 15)) {
-			console.error(`  ${line}`);
+		if (resumeFlag) {
+			dirtyFiles = gitStatus.stdout.trim();
+			console.log(
+				ansi.yellow(ansi.bold("warning: resuming with dirty working tree")),
+			);
+			const lines = dirtyFiles.split("\n");
+			for (const line of lines.slice(0, 15)) {
+				console.log(`  ${line}`);
+			}
+			if (lines.length > 15) {
+				console.log(ansi.dim(`  … and ${lines.length - 15} more`));
+			}
+			console.log();
+		} else {
+			console.error(
+				ansi.red(ansi.bold("error: working directory is not clean")),
+			);
+			console.error("commit or stash your changes before running chad.\n");
+			const lines = gitStatus.stdout.trim().split("\n");
+			for (const line of lines.slice(0, 15)) {
+				console.error(`  ${line}`);
+			}
+			if (lines.length > 15) {
+				console.error(ansi.dim(`  … and ${lines.length - 15} more`));
+			}
+			console.error(
+				ansi.dim("\nhint: use --resume to continue with dirty files"),
+			);
+			releaseLock();
+			process.exit(1);
 		}
-		if (lines.length > 15) {
-			console.error(ansi.dim(`  … and ${lines.length - 15} more`));
-		}
-		releaseLock();
-		process.exit(1);
 	}
 }
 
@@ -839,9 +883,26 @@ for (let i = 1; i <= maxIterations; i++) {
 	// Pre-process: extract current step block, sandwich the prompt
 	const stepBlock = extractCurrentStepBlock(content);
 	const planFooter = `Plan file location: ${plan}\nWhen you finish your step, call the completeStep tool to mark it done. Do NOT edit the plan file to check off steps — chad handles that for you.\nThe escapeHatch tool is ONLY for ending the entire loop: use escapeHatch("success", message) when the ENTIRE plan is done, or escapeHatch("failure", message) when blocked.`;
+
+	let resumeContext = "";
+	if (i === 1 && dirtyFiles) {
+		resumeContext = `>>> RESUME CONTEXT:
+This session is resuming with uncommitted changes in the working tree.
+The following files were dirty when chad started:
+
+${dirtyFiles}
+
+Before starting your step, verify whether these files are related to the current task.
+If they are NOT part of this plan's work, call escapeHatch("failure", "Dirty files unrelated to this plan: <list the files>") immediately.
+If they ARE part of the current task (e.g., leftover from a previous interrupted run), proceed normally.
+<<<
+
+`;
+	}
+
 	const prompt = stepBlock
-		? `>>> CURRENT STEP:\n${stepBlock}\n<<<\n\n${content}\n\n>>> CURRENT STEP (reminder):\n${stepBlock}\n<<<\n\n${planFooter}`
-		: `${content}\n\n${planFooter}`;
+		? `${resumeContext}>>> CURRENT STEP:\n${stepBlock}\n<<<\n\n${content}\n\n>>> CURRENT STEP (reminder):\n${stepBlock}\n<<<\n\n${planFooter}`
+		: `${resumeContext}${content}\n\n${planFooter}`;
 
 	console.log(`\n${ansi.bold(`=== iteration ${i} / ${maxIterations} ===`)}\n`);
 	appendFileSync(DEBUG_LOG, `\n=== iteration ${i} ===\n`);
