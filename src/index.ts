@@ -858,10 +858,18 @@ for (let i = 1; i <= maxIterations; i++) {
 		);
 	}
 
-	// Check escape hatch
+	// Check MCP signals (escape hatch / plan done)
 	if (existsSync(escapeSignalFile)) {
 		try {
 			const signal = JSON.parse(readFileSync(escapeSignalFile, "utf8"));
+			if (signal.type === "done") {
+				unlinkSync(escapeSignalFile);
+				console.log(
+					ansi.green(ansi.bold("plan complete (agent called planDone).")),
+				);
+				printTimingStats();
+				process.exit(0);
+			}
 			console.log(`\n${ansi.red(ansi.bold("escape hatch:"))} ${signal.reason}`);
 		} catch {
 			console.log(`\n${ansi.red(ansi.bold("escape hatch triggered"))}`);

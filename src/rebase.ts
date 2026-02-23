@@ -90,17 +90,13 @@ ${diffStat}
 
 	if (existsSync(planPath)) {
 		const planContent = readFileSync(planPath, "utf8");
-		// Extract just the steps section for context
-		const stepsMatch = planContent.match(/## Steps[\s\S]*/);
-		if (stepsMatch) {
-			context += `\n\n### Plan steps (for reference)\n\`\`\`\n${stepsMatch[0].slice(0, 3000)}\n\`\`\``;
-		}
+		context += `\n\n### Plan file\n\`\`\`\n${planContent}\n\`\`\``;
 	}
 
 	context +=
 		"\n\nAnalyze these commits and propose a rebase strategy. Show me what the final commit history would look like.";
 
-	const args = ["--system-prompt", SYSTEM_PROMPT, "-p", context];
+	const args = ["--system-prompt", SYSTEM_PROMPT, context];
 
 	const { status } = spawnSync("claude", args, { stdio: "inherit" });
 	process.exit(status ?? 0);

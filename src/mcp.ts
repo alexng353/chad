@@ -55,27 +55,52 @@ function handle(signalFile: string, msg: Record<string, unknown>) {
 								required: ["reason"],
 							},
 						},
+						{
+							name: "planDone",
+							description:
+								"Signal that the entire plan is complete. Call this when all steps in the plan are checked off and there is no more work to do.",
+							inputSchema: {
+								type: "object",
+								properties: {},
+							},
+						},
 					],
 				},
 			});
 			break;
 		case "tools/call": {
 			const params = msg.params as Record<string, unknown>;
+			const toolName = params.name as string;
 			const args = (params.arguments ?? {}) as Record<string, string>;
-			const reason = args.reason ?? "no reason given";
-			writeFileSync(signalFile, JSON.stringify({ reason }));
-			send({
-				jsonrpc: "2.0",
-				id,
-				result: {
-					content: [
-						{
-							type: "text",
-							text: `chad will stop after this iteration. Reason: ${reason}`,
-						},
-					],
-				},
-			});
+
+			if (toolName === "planDone") {
+				writeFileSync(signalFile, JSON.stringify({ type: "done" }));
+				send({
+					jsonrpc: "2.0",
+					id,
+					result: {
+						content: [
+							{ type: "text", text: "chad will stop — plan complete." },
+						],
+					},
+				});
+			} else {
+				// escapeHatch (default)
+				const reason = args.reason ?? "no reason given";
+				writeFileSync(signalFile, JSON.stringify({ type: "escape", reason }));
+				send({
+					jsonrpc: "2.0",
+					id,
+					result: {
+						content: [
+							{
+								type: "text",
+								text: `chad will stop after this iteration. Reason: ${reason}`,
+							},
+						],
+					},
+				});
+			}
 			break;
 		}
 		default:
