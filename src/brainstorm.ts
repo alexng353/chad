@@ -90,9 +90,7 @@ export function runBrainstorm(planPath: string) {
 	if (existsSync(planPath)) {
 		const content = readFileSync(planPath, "utf8");
 		args.push(
-			"--resume",
-			"-p",
-			`Here is the current plan file at ${planPath}:\n\n${content}\n\nThe user wants to continue working on this plan. Help them refine, extend, or modify it.`,
+			`Here is the current plan file at ${planPath}:\n\n${content}\n\nHelp me refine, extend, or modify this plan.`,
 		);
 	}
 

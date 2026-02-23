@@ -276,14 +276,18 @@ const sessionName = `chad-${planBasename.replace(/[.:]/g, "-")}-${lockHash.slice
 
 // --- tmux re-exec ---
 if (tmuxFlag) {
-	const script = process.argv[1];
 	const tmuxArgs = [plan];
 	if (skipConfirm) tmuxArgs.push("-y");
 	if (maxIterations !== 50) tmuxArgs.push("-m", String(maxIterations));
 	if (boxHeight !== 10) tmuxArgs.push("-b", String(boxHeight));
+
+	const cmd = isCompiledBinary()
+		? [process.execPath, ...tmuxArgs]
+		: ["bun", process.argv[1], ...tmuxArgs];
+
 	const { status } = spawnSync(
 		"tmux",
-		["new-session", "-s", sessionName, "--", "bun", script, ...tmuxArgs],
+		["new-session", "-s", sessionName, "--", ...cmd],
 		{ stdio: "inherit" },
 	);
 	process.exit(status ?? 0);
