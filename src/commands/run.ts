@@ -32,6 +32,7 @@ function notify(mode: NotifyMode, level: "done" | "iter", message: string) {
 
 export const RUN_FLAGS: FlagDef[] = [
 	{ long: "--tmux", description: "Run inside a new tmux session" },
+	{ long: "--no-tmux", description: "Disable tmux even if set in config" },
 	{ long: "--resume", description: "Resume with dirty working tree" },
 	{ short: "-y", long: "--yes", description: "Skip interactive confirmation" },
 	{
@@ -71,7 +72,8 @@ export async function executeRun(
 	const skipConfirm = flags.yes === true;
 	const dryRun = flags["dry-run"] === true;
 	const resumeFlag = flags.resume === true;
-	const tmuxFlag = flags.tmux === true || config.tmux;
+	const tmuxFlag =
+		flags["no-tmux"] === true ? false : flags.tmux === true || config.tmux;
 	const maxIterations = typeof flags.max === "number" ? flags.max : config.max;
 	const boxHeight =
 		typeof flags["box-height"] === "number"
