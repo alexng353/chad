@@ -1,12 +1,23 @@
-export const ZSH_COMPLETIONS = `#compdef chad
+export const ZSH_COMPLETIONS = `
 
 _chad_plan_files() {
   local chad_dir="\${HOME}/.chad"
-  local -a plans
+  local -a incomplete complete
   if [[ -d "$chad_dir" ]]; then
-    plans=("\${chad_dir}"/*.md(N:t))
-    if (( \${#plans} )); then
-      compadd -Q -p '~/.chad/' -a plans
+    for f in "\${chad_dir}"/*.md(N); do
+      local name="\${f:t}"
+      if grep -q '^ *- \\[ \\]' "$f" 2>/dev/null; then
+        incomplete+=("$name")
+      else
+        complete+=("$name")
+      fi
+    done
+    # Show incomplete plans first, then complete ones
+    if (( \${#incomplete} )); then
+      compadd -Q -p '~/.chad/' -a incomplete
+    fi
+    if (( \${#complete} )); then
+      compadd -Q -p '~/.chad/' -a complete
     fi
   fi
   _files -g '*.md'
@@ -63,5 +74,5 @@ _chad() {
     '*::argument:_chad_rest_args'
 }
 
-_chad "$@"
+compdef _chad chad
 `;

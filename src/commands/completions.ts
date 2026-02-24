@@ -6,8 +6,8 @@ export function completionsHandler(ctx: RouteContext): void {
 	if (shell === "zsh") {
 		console.log(ZSH_COMPLETIONS);
 	} else {
-		console.error("Usage: chad completions zsh");
-		process.exit(1);
+		console.log('Add to your .zshrc:\n\n  eval "$(chad completions zsh)"');
+		process.exit(shell ? 1 : 0);
 	}
 	process.exit(0);
 }
