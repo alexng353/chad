@@ -1,7 +1,6 @@
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, resolve } from "node:path";
-// @ts-expect-error — Bun text import
 import EXAMPLE_CONFIG from "../../config.example.toml" with { type: "text" };
 import { ansi } from "../ansi";
 import type { RouteContext } from "../router";
