@@ -34,6 +34,7 @@ _chad_first_arg() {
     'validate:Check plan file format and structure'
     'brainstorm:Open interactive session to develop the plan'
     'rebase:Clean up git history'
+    'archive:Move a plan to ~/.chad/archive/'
     'update:Update chad to the latest release'
     'completions:Output shell completions'
   )
@@ -46,7 +47,7 @@ _chad_rest_args() {
     status)
       _arguments -s -S '(-w --watch)'{-w,--watch}'[Watch for changes and re-render]' '*:plan:_chad_plan_files'
       ;;
-    validate|brainstorm|rebase)
+    validate|brainstorm|rebase|archive)
       _chad_plan_files
       ;;
     completions)

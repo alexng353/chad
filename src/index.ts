@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { archiveHandler } from "./commands/archive";
 import { brainstormHandler } from "./commands/brainstorm";
 import { completionsHandler } from "./commands/completions";
 import { continueHandler } from "./commands/continue";
@@ -81,6 +82,12 @@ router.route({
 	description: "Clean up git history with claude's help",
 	args: "<plan>",
 	handler: rebaseHandler,
+});
+router.route({
+	name: "archive",
+	description: "Move a plan to ~/.chad/archive/",
+	args: "<plan>",
+	handler: archiveHandler,
 });
 router.route({
 	name: "update",
