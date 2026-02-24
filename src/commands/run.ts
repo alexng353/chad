@@ -134,9 +134,20 @@ export async function executeRun(
 			? [process.execPath, ...tmuxArgs]
 			: ["bun", process.argv[1], ...tmuxArgs];
 
+		// Wrap in sh -c so the tmux pane stays open after chad finishes,
+		// letting the user read the summary before closing.
+		const shellCmd = cmd.map((a) => `'${a.replace(/'/g, "'\\''")}'`).join(" ");
 		const { status } = spawnSync(
 			"tmux",
-			["new-session", "-s", sessionName, "--", ...cmd],
+			[
+				"new-session",
+				"-s",
+				sessionName,
+				"--",
+				"sh",
+				"-c",
+				`${shellCmd}; exec "\${SHELL:-sh}"`,
+			],
 			{ stdio: "inherit" },
 		);
 		process.exit(status ?? 0);
