@@ -12,6 +12,7 @@ import { homedir, tmpdir } from "node:os";
 import { basename, dirname, resolve } from "node:path";
 import { ansi, mdToAnsi } from "../ansi";
 import { BoxModel } from "../box";
+import type { NotifyMode } from "../config";
 import { expandPath } from "../lib/plan-resolve";
 import {
 	extractCurrentStepBlock,
@@ -22,6 +23,12 @@ import {
 import type { FlagDef, RouteContext } from "../router";
 import { checkForUpdateBackground } from "../update";
 import { isCompiledBinary } from "../version";
+
+function notify(mode: NotifyMode, level: "done" | "iter", message: string) {
+	if (mode === "none") return;
+	if (mode === "done" && level === "iter") return;
+	spawn("notify-send", ["chad", message], { stdio: "ignore" }).unref();
+}
 
 export const RUN_FLAGS: FlagDef[] = [
 	{ long: "--tmux", description: "Run inside a new tmux session" },
@@ -73,6 +80,7 @@ export async function executeRun(
 	const cliModel =
 		typeof flags.model === "string" ? (flags.model as string) : null;
 	const model = cliModel ?? config.model;
+	const notifications = config.notifications;
 
 	if (!existsSync(plan)) {
 		console.error(`error: ${plan} not found`);
@@ -623,6 +631,7 @@ export async function executeRun(
 	for (let i = 1; i <= maxIterations; i++) {
 		const content = readFileSync(plan, "utf8");
 		if (!content.includes("- [ ]")) {
+			notify(notifications, "done", "All steps complete");
 			console.log(ansi.green(ansi.bold("all steps complete.")));
 			printTimingStats();
 			process.exit(0);
@@ -715,6 +724,11 @@ If they ARE part of the current task (e.g., leftover from a previous interrupted
 				`  iteration ${i} completed in ${formatElapsed(iterDuration)}  \u00b7  total ${formatElapsed(Date.now() - overallStart)}`,
 			),
 		);
+		notify(
+			notifications,
+			"iter",
+			`Iteration ${i} complete (${formatElapsed(iterDuration)})`,
+		);
 
 		// Check MCP signals (completeStep / escapeHatch)
 		if (existsSync(escapeSignalFile)) {
@@ -733,12 +747,14 @@ If they ARE part of the current task (e.g., leftover from a previous interrupted
 				}
 				for (const signal of signals) {
 					if (signal.type === "done") {
+						notify(notifications, "done", `Plan complete: ${signal.message}`);
 						console.log(
 							ansi.green(ansi.bold(`plan complete: ${signal.message}`)),
 						);
 						printTimingStats();
 						process.exit(0);
 					} else if (signal.type === "escape") {
+						notify(notifications, "done", `Escape hatch: ${signal.message}`);
 						console.log(
 							`\n${ansi.red(ansi.bold("escape hatch:"))} ${signal.message}`,
 						);
@@ -747,6 +763,7 @@ If they ARE part of the current task (e.g., leftover from a previous interrupted
 					}
 				}
 			} catch {
+				notify(notifications, "done", "Escape hatch triggered");
 				console.log(`\n${ansi.red(ansi.bold("escape hatch triggered"))}`);
 				unlinkSync(escapeSignalFile);
 				printTimingStats();
@@ -761,6 +778,7 @@ If they ARE part of the current task (e.g., leftover from a previous interrupted
 		}
 
 		if (stopAfterIteration) {
+			notify(notifications, "done", "Stopped (Ctrl-X)");
 			console.log("[chad] stopped (Ctrl-X).");
 			printTimingStats();
 			process.exit(0);
@@ -771,6 +789,7 @@ If they ARE part of the current task (e.g., leftover from a previous interrupted
 		}
 	}
 
+	notify(notifications, "done", `Hit max iterations (${maxIterations})`);
 	console.log(`hit max iterations (${maxIterations})`);
 	printTimingStats();
 }

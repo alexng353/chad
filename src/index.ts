@@ -2,6 +2,7 @@
 import { archiveHandler } from "./commands/archive";
 import { brainstormHandler } from "./commands/brainstorm";
 import { completionsHandler } from "./commands/completions";
+import { configHandler } from "./commands/config";
 import { continueHandler } from "./commands/continue";
 import { listHandler } from "./commands/list";
 import { newHandler } from "./commands/new";
@@ -88,6 +89,12 @@ router.route({
 	description: "Move a plan to ~/.chad/archive/",
 	args: "<plan>",
 	handler: archiveHandler,
+});
+router.route({
+	name: "config",
+	description: "Manage config file",
+	args: "init",
+	handler: configHandler,
 });
 router.route({
 	name: "update",

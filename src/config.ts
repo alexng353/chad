@@ -3,11 +3,13 @@ import { homedir } from "node:os";
 import { resolve } from "node:path";
 
 export type CoffeeMode = "systemd-inhibit" | "off";
+export type NotifyMode = "all" | "none" | "done";
 
 export type ChadConfig = {
 	tmux: boolean;
 	max: number;
 	model: string | null;
+	notifications: NotifyMode;
 	coffee: { mode: CoffeeMode };
 };
 
@@ -15,6 +17,7 @@ const DEFAULTS: ChadConfig = {
 	tmux: false,
 	max: 50,
 	model: null,
+	notifications: "none",
 	coffee: { mode: "off" },
 };
 
@@ -48,6 +51,10 @@ export function loadConfig(): ChadConfig {
 				? parsed.max
 				: DEFAULTS.max,
 		model: typeof parsed.model === "string" ? parsed.model : DEFAULTS.model,
+		notifications:
+			parsed.notifications === "all" || parsed.notifications === "done"
+				? parsed.notifications
+				: DEFAULTS.notifications,
 		coffee: {
 			mode:
 				coffee?.mode === "systemd-inhibit"

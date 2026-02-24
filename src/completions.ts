@@ -35,6 +35,7 @@ _chad_first_arg() {
     'brainstorm:Open interactive session to develop the plan'
     'rebase:Clean up git history'
     'archive:Move a plan to ~/.chad/archive/'
+    'config:Manage config file'
     'update:Update chad to the latest release'
     'completions:Output shell completions'
   )
@@ -52,6 +53,9 @@ _chad_rest_args() {
       ;;
     completions)
       compadd zsh
+      ;;
+    config)
+      compadd init path
       ;;
     new)
       ;;
