@@ -22,7 +22,7 @@ export class BoxModel {
 	/** Structured chin tags rendered below the bottom border. */
 	chinTags: ChinTag[] = [];
 
-	private boxLines: number;
+	private configuredBoxLines: number;
 	private drawn = false;
 
 	/** Cached wrapped visual lines for committed content. */
@@ -31,7 +31,16 @@ export class BoxModel {
 	private cachedCols = 0;
 
 	constructor(boxLines: number) {
-		this.boxLines = boxLines;
+		this.configuredBoxLines = boxLines;
+	}
+
+	/** Effective content lines, clamped to fit the terminal. */
+	private get boxLines(): number {
+		const rows = process.stdout.rows || 0;
+		if (rows === 0) return this.configuredBoxLines;
+		// Reserve 3 for top border + bottom border + chin, plus 2 for shell context
+		const max = Math.max(1, rows - 5);
+		return Math.min(this.configuredBoxLines, max);
 	}
 
 	/** Total lines this box occupies on screen (top + content + bottom + chin). */

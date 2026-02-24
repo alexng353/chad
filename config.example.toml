@@ -7,6 +7,9 @@ tmux = false
 # Max iterations per run (default: 50)
 max = 50
 
+# Box height in terminal lines (default: 30)
+height = 30
+
 # Model to use (e.g. "opus", "sonnet"). Omit to use claude's default.
 # model = "sonnet"
 

@@ -78,7 +78,7 @@ export async function executeRun(
 	const boxHeight =
 		typeof flags["box-height"] === "number"
 			? (flags["box-height"] as number)
-			: 30;
+			: config.height;
 	const cliModel =
 		typeof flags.model === "string" ? (flags.model as string) : null;
 	const model = cliModel ?? config.model;
@@ -127,7 +127,7 @@ export async function executeRun(
 		if (resumeFlag) tmuxArgs.push("--resume");
 		if (maxIterations !== config.max)
 			tmuxArgs.push("-m", String(maxIterations));
-		if (boxHeight !== 30) tmuxArgs.push("-b", String(boxHeight));
+		if (boxHeight !== config.height) tmuxArgs.push("-b", String(boxHeight));
 		if (cliModel) tmuxArgs.push("--model", cliModel);
 
 		const cmd = isCompiledBinary()

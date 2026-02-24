@@ -8,6 +8,7 @@ export type NotifyMode = "all" | "none" | "done";
 export type ChadConfig = {
 	tmux: boolean;
 	max: number;
+	height: number;
 	model: string | null;
 	notifications: NotifyMode;
 	coffee: { mode: CoffeeMode };
@@ -16,6 +17,7 @@ export type ChadConfig = {
 const DEFAULTS: ChadConfig = {
 	tmux: false,
 	max: 50,
+	height: 30,
 	model: null,
 	notifications: "none",
 	coffee: { mode: "off" },
@@ -50,6 +52,10 @@ export function loadConfig(): ChadConfig {
 			typeof parsed.max === "number" && parsed.max >= 1
 				? parsed.max
 				: DEFAULTS.max,
+		height:
+			typeof parsed.height === "number" && parsed.height >= 1
+				? parsed.height
+				: DEFAULTS.height,
 		model: typeof parsed.model === "string" ? parsed.model : DEFAULTS.model,
 		notifications:
 			parsed.notifications === "all" || parsed.notifications === "done"
