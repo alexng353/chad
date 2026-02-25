@@ -30,6 +30,11 @@ export class BoxModel {
 	/** The column width the cache was built at. */
 	private cachedCols = 0;
 
+	/** Index into `lines` where the last contiguous text block starts. */
+	private lastTextStart = 0;
+	/** Whether the most recent content was text (vs tool/metadata). */
+	private inText = false;
+
 	constructor(boxLines: number) {
 		this.configuredBoxLines = boxLines;
 	}
@@ -77,6 +82,21 @@ export class BoxModel {
 		this.drawn = false;
 		this.wrappedCache = [];
 		this.cachedCols = 0;
+		this.lastTextStart = 0;
+		this.inText = false;
+	}
+
+	/** Signal that subsequent content is Claude text output. */
+	markTextStart() {
+		if (!this.inText) {
+			this.lastTextStart = this.lines.length;
+			this.inText = true;
+		}
+	}
+
+	/** Signal that subsequent content is not text (tool, metadata, etc.). */
+	markNonText() {
+		this.inText = false;
 	}
 
 	/** Replace the chin tag list. */
@@ -109,12 +129,20 @@ export class BoxModel {
 		this.drawn = true;
 	}
 
-	/** Erase the drawn box, print final lines as plain text. */
+	/** Erase the drawn box, print the last contiguous text block as plain text. */
 	flush(cols: number) {
 		if (this.drawn) {
 			process.stdout.write(`\x1b[${this.totalHeight}A\x1b[J`);
-			const finalLines = this.getVisualLines(cols);
-			for (const line of finalLines) {
+			this.ensureCache(cols);
+			const inner = cols - 4;
+			const textLines = this.lines.slice(this.lastTextStart);
+			const wrapped: string[] = [];
+			for (const line of textLines) {
+				for (const v of wrapLine(line, inner)) {
+					wrapped.push(v);
+				}
+			}
+			for (const line of wrapped) {
 				process.stdout.write(`${line}\n`);
 			}
 			this.drawn = false;

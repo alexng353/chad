@@ -132,9 +132,8 @@ function renderStatusLines(
 		if (step.checked) {
 			lines.push(`  ${ansi.dim(mdToAnsi(step.line))}`);
 		} else if (spinnerFrame !== undefined && step === nextStep) {
-			const frame = BRAILLE_SPINNER[spinnerFrame % BRAILLE_SPINNER.length];
 			const label = step.line.replace(/^-\s*\[\s*\]\s*/, "");
-			lines.push(`  ${ansi.cyan(frame)} ${mdToAnsi(label)}`);
+			lines.push(`  ${ansi.yellow("- [.]")} ${mdToAnsi(label)}`);
 		} else {
 			lines.push(`  ${mdToAnsi(step.line)}`);
 		}
@@ -145,7 +144,11 @@ function renderStatusLines(
 		lines.push(ansi.green(ansi.bold("all steps complete.")));
 	} else if (nextStep) {
 		lines.push("");
-		lines.push(`${ansi.bold("next:")} ${mdToAnsi(nextStep.line)}`);
+		if (spinnerFrame === undefined) {
+			lines.push(`${ansi.bold("next:")} ${mdToAnsi(nextStep.line)}`);
+		}
+		// In watch mode, the "current:" line is rendered separately so the
+		// spinner can animate without a full re-render.
 	}
 
 	return lines;
@@ -162,35 +165,66 @@ export function printStatus(planPath: string) {
 /** Watch a plan file and live-render status with a braille spinner. */
 export function watchStatus(planPath: string): void {
 	let frame = 0;
-	let lastLineCount = 0;
 	let steps = parseSteps(planPath);
+	let statusLineCount = 0;
+	let hasSpinner = false;
 
 	// Hide cursor
 	process.stdout.write("\x1b[?25l");
 
-	function render() {
-		const lines = renderStatusLines(steps, planPath, frame);
-
-		if (lastLineCount > 0) {
-			process.stdout.write(`\x1b[${lastLineCount}A\x1b[J`);
+	/** Full re-render of status + spinner line. */
+	function renderFull() {
+		const totalClear = statusLineCount + (hasSpinner ? 2 : 0);
+		if (totalClear > 0) {
+			process.stdout.write(`\x1b[${totalClear}A\x1b[J`);
 		}
 
+		const lines = renderStatusLines(steps, planPath, frame);
 		process.stdout.write(`${lines.join("\n")}\n`);
-		lastLineCount = lines.length;
+		statusLineCount = lines.length;
+
+		const nextStep = findNextStep(steps);
+		if (nextStep) {
+			const f = BRAILLE_SPINNER[frame % BRAILLE_SPINNER.length];
+			const label = mdToAnsi(nextStep.line);
+			process.stdout.write(
+				`\n${ansi.bold("current:")} ${ansi.cyan(f)} ${label}\n`,
+			);
+			hasSpinner = true;
+		} else {
+			hasSpinner = false;
+		}
 	}
 
-	render();
+	/** Only update the spinner line at the bottom. */
+	function renderSpinnerOnly() {
+		if (!hasSpinner) return;
+		const nextStep = findNextStep(steps);
+		if (!nextStep) return;
+		// Move up 1 line, clear it, write new spinner
+		process.stdout.write("\x1b[1A\x1b[2K");
+		const f = BRAILLE_SPINNER[frame % BRAILLE_SPINNER.length];
+		const label = mdToAnsi(nextStep.line);
+		process.stdout.write(`${ansi.bold("current:")} ${ansi.cyan(f)} ${label}\n`);
+	}
 
-	// Spinner animation
+	renderFull();
+
+	// Spinner animation — only redraws the bottom line
 	const spinnerInterval = setInterval(() => {
 		frame++;
-		render();
+		renderSpinnerOnly();
 	}, 80);
 
-	// Re-parse on file change
+	// Re-parse on file change — full re-render
 	const watcher = watch(planPath, () => {
 		try {
 			steps = parseSteps(planPath);
+			renderFull();
+			if (steps.every((s) => s.checked)) {
+				cleanup();
+				process.exit(0);
+			}
 		} catch {
 			// file may be mid-write; skip this event
 		}

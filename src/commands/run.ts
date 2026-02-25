@@ -419,12 +419,15 @@ export async function executeRun(
 				if (b.type === "tool_use") {
 					toolName = b.name ?? "?";
 					toolInput = "";
+					box.markNonText();
 					box.addLine(`${ansi.yellow("\u25b6")} ${ansi.bold(toolName)}`);
 					draw();
 				} else if (b.type === "text") {
 					textBuf = "";
+					box.markTextStart();
 				} else if (b.type === "thinking") {
 					thinkingBuf = "";
+					box.markNonText();
 				}
 				break;
 			}
@@ -475,6 +478,7 @@ export async function executeRun(
 				break;
 			}
 			case "message_delta": {
+				box.markNonText();
 				if (ev.usage) {
 					const inp = ev.usage.input_tokens ?? 0;
 					const out = ev.usage.output_tokens ?? 0;
@@ -487,6 +491,7 @@ export async function executeRun(
 				break;
 			}
 			case "error": {
+				box.markNonText();
 				box.addLine(
 					ansi.red(`${ansi.bold("error:")} ${ev.error?.message ?? "unknown"}`),
 				);
