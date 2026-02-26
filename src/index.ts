@@ -57,6 +57,13 @@ router.route({
 	name: "new",
 	description: "Create a new plan from template in ~/.chad/",
 	args: "<name>",
+	flags: [
+		{
+			long: "--template-only",
+			short: "-t",
+			description: "Write blank template without opening Claude",
+		},
+	],
 	handler: newHandler,
 });
 router.route({
