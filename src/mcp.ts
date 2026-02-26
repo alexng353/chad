@@ -71,6 +71,34 @@ function handle(signalFile: string, msg: Record<string, unknown>) {
 								required: ["type", "message"],
 							},
 						},
+						{
+							name: "reExecute",
+							description:
+								"Request a fresh Claude instance with clean context to continue the CURRENT step. Use when your context is long/degraded. The full plan is re-included automatically — just describe what you did and what remains.",
+							inputSchema: {
+								type: "object",
+								properties: {
+									completed_work: {
+										type: "array",
+										items: { type: "string" },
+										description:
+											"List of concrete things accomplished (e.g., 'Created src/auth.ts with JWT validation')",
+									},
+									remaining_work: {
+										type: "array",
+										items: { type: "string" },
+										description:
+											"List of concrete things still to do for THIS step",
+									},
+									current_state: {
+										type: "string",
+										description:
+											"Brief description of current codebase state relevant to this step",
+									},
+								},
+								required: ["completed_work", "remaining_work", "current_state"],
+							},
+						},
 					],
 				},
 			});
@@ -78,7 +106,8 @@ function handle(signalFile: string, msg: Record<string, unknown>) {
 		case "tools/call": {
 			const params = msg.params as Record<string, unknown>;
 			const toolName = params.name as string;
-			const args = (params.arguments ?? {}) as Record<string, string>;
+			// biome-ignore lint/suspicious/noExplicitAny: MCP tool args have varied shapes
+			const args = (params.arguments ?? {}) as Record<string, any>;
 
 			if (toolName === "completeStep") {
 				appendFileSync(
@@ -135,6 +164,28 @@ function handle(signalFile: string, msg: Record<string, unknown>) {
 						},
 					});
 				}
+			} else if (toolName === "reExecute") {
+				appendFileSync(
+					signalFile,
+					`${JSON.stringify({
+						type: "re_execute",
+						completed_work: args.completed_work ?? [],
+						remaining_work: args.remaining_work ?? [],
+						current_state: args.current_state ?? "",
+					})}\n`,
+				);
+				send({
+					jsonrpc: "2.0",
+					id,
+					result: {
+						content: [
+							{
+								type: "text",
+								text: "Re-execution scheduled. A fresh instance will continue with your handoff. Stop working now — do not make any more changes.",
+							},
+						],
+					},
+				});
 			} else {
 				send({
 					jsonrpc: "2.0",

@@ -309,6 +309,16 @@ export async function executeRun(
 	let timerInterval: ReturnType<typeof setInterval> | null = null;
 	let stopAfterIteration = false;
 
+	let reExecGeneration = 0;
+	const RE_EXEC_MAX = 7;
+	type Handoff = {
+		generation: number;
+		completed_work: string[];
+		remaining_work: string[];
+		current_state: string;
+	};
+	let handoffChain: Handoff[] = [];
+
 	function formatElapsed(ms: number): string {
 		const s = Math.floor(ms / 1000);
 		const m = Math.floor(s / 60);
@@ -546,6 +556,11 @@ export async function executeRun(
 					return input.taskId ?? "";
 				case "TaskList":
 					return null;
+				case "mcp__chad-escape__reExecute": {
+					const done = input.completed_work ?? [];
+					const todo = input.remaining_work ?? [];
+					return `handoff: ${done.length} done, ${todo.length} remaining`;
+				}
 				default: {
 					const k = Object.keys(input)[0];
 					if (!k) return "";
@@ -656,7 +671,38 @@ export async function executeRun(
 		}
 
 		const stepBlock = extractCurrentStepBlock(content);
-		const planFooter = `Plan file location: ${plan}\nWhen you finish your step, call the completeStep tool to mark it done. Do NOT edit the plan file to check off steps \u2014 chad handles that for you.\nThe escapeHatch tool is ONLY for ending the entire loop: use escapeHatch("success", message) when the ENTIRE plan is done, or escapeHatch("failure", message) when blocked.`;
+		const generationNote =
+			reExecGeneration > 0
+				? `\nYou are generation ${reExecGeneration + 1} of ${RE_EXEC_MAX} for this step. `
+				: "";
+		const planFooter = `Plan file location: ${plan}\nWhen you finish your step, call the completeStep tool to mark it done. Do NOT edit the plan file to check off steps \u2014 chad handles that for you.\nThe escapeHatch tool is ONLY for ending the entire loop: use escapeHatch("success", message) when the ENTIRE plan is done, or escapeHatch("failure", message) when blocked.\nIf your context is getting long or degraded, use the reExecute tool to hand off to a fresh instance with clean context. The full plan is re-included automatically.${generationNote}`;
+
+		let handoffContext = "";
+		if (handoffChain.length > 0) {
+			const lines: string[] = [];
+			lines.push(">>> RE-EXECUTION HANDOFF");
+			lines.push(
+				`You are a fresh instance (generation ${reExecGeneration + 1} of ${RE_EXEC_MAX}) continuing work on the current step.`,
+			);
+			lines.push(
+				"Previous instance(s) handed off the following context. Verify reported state before trusting it.\n",
+			);
+			for (const h of handoffChain) {
+				lines.push(`--- Generation ${h.generation} → ${h.generation + 1} ---`);
+				lines.push(`State: ${h.current_state}`);
+				if (h.completed_work.length > 0) {
+					lines.push("Completed:");
+					for (const item of h.completed_work) lines.push(`  - ${item}`);
+				}
+				if (h.remaining_work.length > 0) {
+					lines.push("Remaining:");
+					for (const item of h.remaining_work) lines.push(`  - ${item}`);
+				}
+				lines.push("");
+			}
+			lines.push("<<<\n");
+			handoffContext = lines.join("\n");
+		}
 
 		let resumeContext = "";
 		if (i === 1 && dirtyFiles) {
@@ -675,8 +721,8 @@ If they ARE part of the current task (e.g., leftover from a previous interrupted
 		}
 
 		const prompt = stepBlock
-			? `${resumeContext}>>> CURRENT STEP:\n${stepBlock}\n<<<\n\n${content}\n\n>>> CURRENT STEP (reminder):\n${stepBlock}\n<<<\n\n${planFooter}`
-			: `${resumeContext}${content}\n\n${planFooter}`;
+			? `${handoffContext}${resumeContext}>>> CURRENT STEP:\n${stepBlock}\n<<<\n\n${content}\n\n>>> CURRENT STEP (reminder):\n${stepBlock}\n<<<\n\n${planFooter}`
+			: `${handoffContext}${resumeContext}${content}\n\n${planFooter}`;
 
 		console.log(
 			`\n${ansi.bold(`=== iteration ${i} / ${maxIterations} ===`)}\n`,
@@ -748,7 +794,8 @@ If they ARE part of the current task (e.g., leftover from a previous interrupted
 			`Iteration ${i} complete (${formatElapsed(iterDuration)})`,
 		);
 
-		// Check MCP signals (completeStep / escapeHatch)
+		// Check MCP signals (completeStep / escapeHatch / reExecute)
+		let stepCompleted = false;
 		if (existsSync(escapeSignalFile)) {
 			try {
 				const raw = readFileSync(escapeSignalFile, "utf8");
@@ -761,6 +808,10 @@ If they ARE part of the current task (e.g., leftover from a previous interrupted
 				for (const signal of signals) {
 					if (signal.type === "step_complete") {
 						markCurrentStepComplete(plan);
+						stepCompleted = true;
+						// Reset re-exec state on step completion
+						reExecGeneration = 0;
+						handoffChain = [];
 					}
 				}
 				for (const signal of signals) {
@@ -780,10 +831,60 @@ If they ARE part of the current task (e.g., leftover from a previous interrupted
 						process.exit(1);
 					}
 				}
+
+				// Handle re_execute signal (only if step wasn't also completed)
+				if (!stepCompleted) {
+					for (const signal of signals) {
+						if (signal.type === "re_execute") {
+							reExecGeneration++;
+							const handoff: Handoff = {
+								generation: reExecGeneration - 1,
+								completed_work: signal.completed_work ?? [],
+								remaining_work: signal.remaining_work ?? [],
+								current_state: signal.current_state ?? "",
+							};
+							handoffChain.push(handoff);
+
+							// Audit log
+							const auditLog = resolve(
+								tmpdir(),
+								`chad-handoff-${process.pid}.log`,
+							);
+							appendFileSync(
+								auditLog,
+								`[${new Date().toISOString()}] gen ${reExecGeneration - 1} → ${reExecGeneration} | done: ${handoff.completed_work.length} | remaining: ${handoff.remaining_work.length}\n`,
+							);
+
+							if (reExecGeneration >= RE_EXEC_MAX) {
+								console.log(
+									ansi.yellow(
+										`[chad] re-execute cap reached (${RE_EXEC_MAX}). Continuing without handoff.`,
+									),
+								);
+								reExecGeneration = 0;
+								handoffChain = [];
+							} else {
+								console.log(
+									`\n${ansi.cyan(ansi.bold(`[chad] re-execute: generation ${reExecGeneration - 1} → ${reExecGeneration}`))}`,
+								);
+								const doneCount = handoff.completed_work.length;
+								const todoCount = handoff.remaining_work.length;
+								console.log(
+									ansi.dim(
+										`  ${doneCount} item${doneCount === 1 ? "" : "s"} done, ${todoCount} remaining`,
+									),
+								);
+							}
+							break; // Only process first re_execute signal
+						}
+					}
+				}
 			} catch {
 				notify(notifications, "done", "Escape hatch triggered");
 				console.log(`\n${ansi.red(ansi.bold("escape hatch triggered"))}`);
-				unlinkSync(escapeSignalFile);
+				try {
+					unlinkSync(escapeSignalFile);
+				} catch {}
 				printTimingStats();
 				process.exit(1);
 			}
