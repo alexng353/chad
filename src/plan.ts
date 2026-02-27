@@ -241,9 +241,33 @@ export function watchStatus(planPath: string): void {
 		}
 	});
 
+	// Listen for keypresses — 'r' to re-render, 'q'/Ctrl-C to quit
+	if (process.stdin.isTTY) {
+		process.stdin.setRawMode(true);
+		process.stdin.resume();
+		process.stdin.on("data", (data: Buffer) => {
+			const ch = data.toString();
+			if (ch === "r" || ch === "R") {
+				steps = parseSteps(planPath);
+				// Clear entire screen and re-render from the top
+				process.stdout.write("\x1b[2J\x1b[H");
+				statusLineCount = 0;
+				hasSpinner = false;
+				renderFull();
+			} else if (ch === "q" || ch === "\x03") {
+				// q or Ctrl-C
+				cleanup();
+				process.exit(0);
+			}
+		});
+	}
+
 	function cleanup() {
 		clearInterval(spinnerInterval);
 		watcher.close();
+		if (process.stdin.isTTY) {
+			process.stdin.setRawMode(false);
+		}
 		// Show cursor
 		process.stdout.write("\x1b[?25h");
 	}
