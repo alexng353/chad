@@ -1,8 +1,15 @@
 import { readdirSync, readFileSync, watch, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { ansi, mdToAnsi } from "./ansi";
+import { ansi, mdToAnsi, splitAtWidth, stripAnsi } from "./ansi";
 
 const BRAILLE_SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+/** Truncate an ANSI string to fit within `width` visible characters, adding ellipsis if needed. */
+function truncLine(s: string, width: number): string {
+	if (width <= 0 || stripAnsi(s).length <= width) return s;
+	const [truncated] = splitAtWidth(s, width - 1);
+	return `${truncated}…`;
+}
 
 export type Step = {
 	line: string;
@@ -174,22 +181,24 @@ export function watchStatus(planPath: string): void {
 
 	/** Full re-render of status + spinner line. */
 	function renderFull() {
+		const cols = process.stdout.columns || 80;
 		const totalClear = statusLineCount + (hasSpinner ? 2 : 0);
 		if (totalClear > 0) {
 			process.stdout.write(`\x1b[${totalClear}A\x1b[J`);
 		}
 
 		const lines = renderStatusLines(steps, planPath, frame);
-		process.stdout.write(`${lines.join("\n")}\n`);
+		process.stdout.write(
+			`${lines.map((l) => truncLine(l, cols)).join("\n")}\n`,
+		);
 		statusLineCount = lines.length;
 
 		const nextStep = findNextStep(steps);
 		if (nextStep) {
 			const f = BRAILLE_SPINNER[frame % BRAILLE_SPINNER.length];
 			const label = mdToAnsi(nextStep.line);
-			process.stdout.write(
-				`\n${ansi.bold("current:")} ${ansi.cyan(f)} ${label}\n`,
-			);
+			const line = `${ansi.bold("current:")} ${ansi.cyan(f)} ${label}`;
+			process.stdout.write(`\n${truncLine(line, cols)}\n`);
 			hasSpinner = true;
 		} else {
 			hasSpinner = false;
@@ -201,11 +210,13 @@ export function watchStatus(planPath: string): void {
 		if (!hasSpinner) return;
 		const nextStep = findNextStep(steps);
 		if (!nextStep) return;
+		const cols = process.stdout.columns || 80;
 		// Move up 1 line, clear it, write new spinner
 		process.stdout.write("\x1b[1A\x1b[2K");
 		const f = BRAILLE_SPINNER[frame % BRAILLE_SPINNER.length];
 		const label = mdToAnsi(nextStep.line);
-		process.stdout.write(`${ansi.bold("current:")} ${ansi.cyan(f)} ${label}\n`);
+		const line = `${ansi.bold("current:")} ${ansi.cyan(f)} ${label}`;
+		process.stdout.write(`${truncLine(line, cols)}\n`);
 	}
 
 	renderFull();
