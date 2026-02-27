@@ -241,6 +241,14 @@ export function watchStatus(planPath: string): void {
 		}
 	});
 
+	// Re-render on terminal resize
+	process.stdout.on("resize", () => {
+		process.stdout.write("\x1b[2J\x1b[H");
+		statusLineCount = 0;
+		hasSpinner = false;
+		renderFull();
+	});
+
 	// Listen for keypresses — 'r' to re-render, 'q'/Ctrl-C to quit
 	if (process.stdin.isTTY) {
 		process.stdin.setRawMode(true);
