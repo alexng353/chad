@@ -111,6 +111,45 @@ fpath=(~/.zfunc $fpath)
 autoload -Uz compinit && compinit
 ```
 
+## Skills
+
+Chad ships [Claude Code skills](https://docs.anthropic.com/en/docs/claude-code/skills) that let you invoke chad commands directly from Claude Code conversations. Skills are markdown files that teach Claude how to use chad's CLI.
+
+### Install
+
+```bash
+# Symlink all skills into ~/.claude/skills/
+bash scripts/install-skills.sh
+
+# Preview what would be installed (dry run)
+bash scripts/install-skills.sh --dry-run
+```
+
+Or manually symlink a single skill:
+
+```bash
+ln -s /path/to/chad/.claude/skills/chad-run ~/.claude/skills/chad-run
+```
+
+### Available skills
+
+| Skill | Triggers | Description |
+|-------|----------|-------------|
+| `chad-run` | "run plan", "chad run", "execute plan", "start plan" | Run a chad plan |
+| `chad-status` | "plan status", "chad status", "check progress", "how far along" | Check plan progress |
+| `chad-validate` | "validate plan", "chad validate", "check plan format" | Validate a plan's format |
+| `chad-new` | "new plan", "chad new", "create plan", "start a new chad plan" | Create a new plan from template |
+| `chad-brainstorm` | "brainstorm plan", "chad brainstorm", "refine plan", "improve plan" | Refine an existing plan |
+
+### Non-interactive mode
+
+All skills support a `--non-interactive` / `-y` flag. When present in `$ARGUMENTS`, the skill skips confirmations and interactive pickers — useful when another agent calls a skill inside an autonomous loop.
+
+```bash
+# Example: run a plan without prompting (from another agent)
+/chad-run my-feature --non-interactive
+```
+
 ## Plan format
 
 Plans are markdown files with three sections:
